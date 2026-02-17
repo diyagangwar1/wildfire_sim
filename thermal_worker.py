@@ -1,88 +1,160 @@
 """
-Wildfire Multi-Drone Simulation - Thermal Worker
+Wildfire Multi-Drone Simulation — Thermal Worker
+Phases implemented:
+- Phase 1 (Realism): probabilistic fire, variable shapes (2D grids + 1D arrays)
+- Phase 2 (Robustness): dropout simulation + reconnect loop
+- Phase 3 (Timing): GPS/UTC-style timestamps (tx_ns) + processing time measurement
 
-Simulates thermal sensor output with probabilistic fire generation.
-Sends variable-shaped data (2D grids or 1D arrays) to the fusion controller.
+Sends thermal frames over TCP to controller on port 5001.
 """
 
-import socket, json, time, random, sys
+from __future__ import annotations
+import socket
+import json
+import time
+import random
+import sys
+from typing import Any, Dict, List, Tuple
+
+from gps_time import utc_ns, utc_iso
 
 # --- Network ---
-HOST = sys.argv[1]   # Controller IP (e.g. 10.0.0.1)
 PORT = 5001
 
+# --- Phase 2: dropouts / robustness ---
+DROP_PROB = 0.10          # simulate link loss at app layer (in addition to Mininet loss)
+RECONNECT_SLEEP_S = 1.0   # if controller is down, retry
+
 # --- Send behavior ---
-DROP_PROB = 0.1      # Packet dropout probability (simulates link loss)
-SEND_HZ = 2          # Send rate in Hz
+SEND_HZ = 2               # send rate in Hz
 
-# --- Temperature model (Gaussian baseline) ---
-BASE_MEAN = 70.0     # °C - normal ambient
-BASE_STD = 2.0       # Variance
+# --- Temperature model ---
+BASE_MEAN = 70.0
+BASE_STD = 2.0
 
-# --- Probabilistic fire model (p > threshold => fire-like frame) ---
-FIRE_P_THRESHOLD = 0.6   # If random() > 0.6, inflate temps
-FIRE_INFLATION = 10.0    # °C added to all cells in fire mode
-HOTSPOT_MEAN = 130.0     # °C - localized hotspots (exceeds controller threshold)
+# --- Probabilistic fire model ---
+FIRE_P_THRESHOLD = 0.6
+FIRE_INFLATION = 10.0
+HOTSPOT_MEAN = 130.0      # should exceed controller threshold of 100
 HOTSPOT_STD = 3.0
 
-# --- Variable data sizes (simulates real sensor output) ---
-SHAPES_2D = [(2, 2), (4, 4), (3, 3), (2, 4)]   # 2D grid dimensions
-LENS_1D = [2, 4, 8, 15]                         # 1D array lengths
-P_SEND_1D = 0.3                                 # 30% of packets are 1D
+# --- Variable data sizes ---
+SHAPES_2D: List[Tuple[int, int]] = [(2, 2), (3, 3), (4, 4), (2, 4)]
+LENS_1D: List[int] = [2, 4, 8, 15]
+P_SEND_1D = 0.30
 
 
-def gen_thermal():
-    """
-    Generate one thermal frame. Probabilistic fire model: p > 0.6 => fire-like.
-    Returns variable-shaped data: 30% 1D arrays, 70% 2D grids.
-    """
-    p = random.random()
-    fire_like = p > FIRE_P_THRESHOLD
-
-    # 1D output sometimes (irregular sizes - simulates real sensor variability)
-    if random.random() < P_SEND_1D:
-        n = random.choice(LENS_1D)
-        arr = [random.gauss(BASE_MEAN, BASE_STD) for _ in range(n)]
-
-        if fire_like:
-            arr = [x + FIRE_INFLATION for x in arr]
-            k = min(2, n)
-            start = random.randint(0, n - k)
-            for i in range(start, start + k):
-                arr[i] = random.gauss(HOTSPOT_MEAN, HOTSPOT_STD)
-
-        return {"timestamp": time.time(), "shape": [n, 1], "grid": arr}
-
-    # 2D grid output otherwise
-    r, c = random.choice(SHAPES_2D)
+def _gen_grid(r: int, c: int) -> List[List[float]]:
     grid = [[random.gauss(BASE_MEAN, BASE_STD) for _ in range(c)] for _ in range(r)]
-
-    if fire_like:
-        # Global inflation + localized hotspots
-        for i in range(r):
-            for j in range(c):
-                grid[i][j] += FIRE_INFLATION
-        pr = 1 if r == 1 else min(2, r)
-        pc = 1 if c == 1 else min(2, c)
-        r0 = random.randint(0, r - pr)
-        c0 = random.randint(0, c - pc)
-        for i in range(r0, r0 + pr):
-            for j in range(c0, c0 + pc):
-                grid[i][j] = random.gauss(HOTSPOT_MEAN, HOTSPOT_STD)
-
-    return {"timestamp": time.time(), "shape": [r, c], "grid": grid}
+    return grid
 
 
-def main():
-    """Connect to controller and stream thermal data at SEND_HZ with DROP_PROB."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((HOST, PORT))
+def _gen_1d(n: int) -> List[float]:
+    arr = [random.gauss(BASE_MEAN, BASE_STD) for _ in range(n)]
+    return arr
 
-    period = 1.0 / SEND_HZ
+
+def gen_thermal() -> Dict[str, Any]:
+    """
+    Generate one thermal message.
+    Phase 1 realism: variable shapes + probabilistic fire.
+    Phase 3 timing: caller measures proc_ns; we include the decision fire_sim for debug.
+    """
+    fire_sim = (random.random() > FIRE_P_THRESHOLD)
+
+    send_1d = (random.random() < P_SEND_1D)
+
+    if send_1d:
+        n = random.choice(LENS_1D)
+        data = _gen_1d(n)
+
+        if fire_sim:
+            # Inflate baseline
+            data = [x + FIRE_INFLATION for x in data]
+            # Add a hotspot at a random index
+            idx = random.randrange(n)
+            data[idx] = random.gauss(HOTSPOT_MEAN, HOTSPOT_STD)
+
+        shape = {"type": "1d", "len": n}
+    else:
+        r, c = random.choice(SHAPES_2D)
+        grid = _gen_grid(r, c)
+
+        if fire_sim:
+            # Inflate baseline + insert a hotspot somewhere
+            for i in range(r):
+                for j in range(c):
+                    grid[i][j] += FIRE_INFLATION
+            hi = random.randrange(r)
+            hj = random.randrange(c)
+            grid[hi][hj] = random.gauss(HOTSPOT_MEAN, HOTSPOT_STD)
+
+        data = grid
+        shape = {"type": "2d", "rows": r, "cols": c}
+
+    return {
+        "sensor": "thermal",
+        "shape": shape,
+        "data": data,
+        "fire_sim": fire_sim,  # debug/analysis only
+    }
+
+
+def connect(host: str) -> socket.socket:
+    """Phase 2 robustness: keep trying until controller accepts."""
     while True:
-        if random.random() >= DROP_PROB:
-            msg = gen_thermal()
-            s.sendall((json.dumps(msg) + "\n").encode())
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((host, PORT))
+            return s
+        except OSError:
+            time.sleep(RECONNECT_SLEEP_S)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: python3 thermal_worker.py <CONTROLLER_IP>")
+        sys.exit(1)
+
+    host = sys.argv[1]
+    seq = 0
+    period = 1.0 / float(SEND_HZ)
+
+    sock = connect(host)
+
+    while True:
+        # Phase 2: dropout simulation
+        if random.random() < DROP_PROB:
+            time.sleep(period)
+            continue
+
+        # Phase 3: timing
+        proc_start_ns = utc_ns()
+        msg = gen_thermal()
+        proc_end_ns = utc_ns()
+
+        tx_ns = utc_ns()
+
+        msg.update({
+            "seq": seq,
+            "tx_ns": tx_ns,
+            "tx_iso": utc_iso(tx_ns),
+            "proc_ns": int(proc_end_ns - proc_start_ns),
+        })
+        seq += 1
+
+        line = (json.dumps(msg) + "\n").encode()
+
+        try:
+            sock.sendall(line)
+        except OSError:
+            # Phase 2: reconnect if controller/mininet link restarts
+            try:
+                sock.close()
+            except Exception:
+                pass
+            sock = connect(host)
+
         time.sleep(period)
 
 

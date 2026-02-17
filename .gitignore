@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+fusion_log.csv
+latency_log.jsonl
+plots/
+*.out
