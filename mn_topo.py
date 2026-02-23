@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 
 from mininet.net import Mininet
-from mininet.node import OVSController
+from mininet.node import OVSSwitch
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
@@ -42,7 +42,7 @@ def main() -> None:
 
     setLogLevel("info")
 
-    net = Mininet(controller=OVSController, link=TCLink)
+    net = Mininet(controller=None, switch=OVSSwitch, link=TCLink, autoSetMacs=True)
 
     c0 = net.addController("c0")
     s1 = net.addSwitch("s1")
