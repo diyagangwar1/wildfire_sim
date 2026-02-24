@@ -9,23 +9,23 @@ Listens on TCP 5001 (thermal) and TCP 5002 (imagery).
 """
 
 from __future__ import annotations
-import socket
+
+import csv
 import json
+import socket
 import sys
 import threading
 import time
-import csv
-import os
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
-from gps_time import utc_ns, utc_iso
+from gps_time import utc_iso, utc_ns
 
 THERMAL_PORT = 5001
 IMAGERY_PORT = 5002
 HOST = "0.0.0.0"
 
-# Fusion constants
+# Phase 1 fusion constants
 TEMP_THRESHOLD = 100.0
 TIME_WINDOW_S = 2.0
 
@@ -33,7 +33,7 @@ TIME_WINDOW_S = 2.0
 EXPECTED_THERMAL_HZ = 2.0
 EXPECTED_IMAGERY_HZ = 2.0
 MONITOR_WINDOW_S = 10.0
-DROP_STOP_THRESHOLD = 0.50   # stop if drop rate > 50%
+DROP_STOP_THRESHOLD = 0.50  # stop if drop rate > 50%
 
 # Output logs
 LATENCY_LOG_JSONL = "latency_log.jsonl"
@@ -46,9 +46,13 @@ last_thermal_rx_ns: Optional[int] = None
 last_imagery_rx_ns: Optional[int] = None
 lock = threading.Lock()
 
-# Phase 2: rolling-window packet arrival timestamps
+# Phase 2: rolling-window packet arrival timestamps (seconds)
 thermal_arrivals: deque = deque()
 imagery_arrivals: deque = deque()
+
+# Phase 2: first-seen timestamps (seconds) to avoid "startup false drop"
+first_thermal_seen_s: Optional[float] = None
+first_imagery_seen_s: Optional[float] = None
 
 # Phase 2: server health (bind success)
 thermal_server_up = False
@@ -67,9 +71,9 @@ def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
 
 
-def prune_old(arrivals: deque, now: float, window_s: float) -> None:
+def prune_old(arrivals: deque, now_s: float, window_s: float) -> None:
     """Remove timestamps older than window_s from arrivals deque."""
-    cutoff = now - window_s
+    cutoff = now_s - window_s
     while arrivals and arrivals[0] < cutoff:
         arrivals.popleft()
 
@@ -79,12 +83,14 @@ def safe_max_temp(thermal_data: Any) -> Tuple[float, str]:
     if thermal_data is None:
         return float("-inf"), "none"
 
+    # 2D list
     if isinstance(thermal_data, list) and thermal_data and isinstance(thermal_data[0], list):
         r = len(thermal_data)
         c = len(thermal_data[0]) if r > 0 else 0
         m = max(max(row) for row in thermal_data if row)
         return float(m), f"{r}x{c}"
 
+    # 1D list
     if isinstance(thermal_data, list):
         m = max(thermal_data) if thermal_data else float("-inf")
         return float(m), f"1d:{len(thermal_data)}"
@@ -101,7 +107,7 @@ def imagery_has_fire(dets: Any) -> bool:
     return False
 
 
-def recv_lines(conn, on_msg) -> None:
+def recv_lines(conn: socket.socket, on_msg) -> None:
     """Read newline-delimited JSON; call on_msg(msg, rx_ns) for each valid message."""
     buf = ""
     while True:
@@ -138,6 +144,7 @@ def evaluate() -> None:
         t = last_thermal
         i = last_imagery
 
+        # Use GPS/UTC tx_ns if provided; otherwise fall back to rx time
         t_tx = int(t.get("tx_ns", 0) or 0)
         i_tx = int(i.get("tx_ns", 0) or 0)
         if t_tx <= 0:
@@ -169,13 +176,16 @@ def evaluate() -> None:
 
         num_dets = len(dets) if isinstance(dets, list) else 0
 
-        print(f"[FUSION] dt={dt_s:.3f}s temp={max_temp:.1f} fire={fire} shape={shape_str} decision={decision}")
+        print(
+            f"[FUSION] dt={dt_s:.3f}s temp={max_temp:.1f} fire={fire} "
+            f"shape={shape_str} decision={decision}"
+        )
 
         # Phase 1/2 CSV
         iso = utc_iso(fusion_end_ns)
-        csv_writer.writerow([
-            fusion_id, iso, f"{dt_s:.6f}", f"{max_temp:.3f}", fire, decision, shape_str, num_dets
-        ])
+        csv_writer.writerow(
+            [fusion_id, iso, f"{dt_s:.6f}", f"{max_temp:.3f}", fire, decision, shape_str, num_dets]
+        )
         logfile.flush()
 
         # Phase 3 JSONL
@@ -212,13 +222,15 @@ def evaluate() -> None:
         print(f"[FUSION] Error processing data: {e}")
 
 
-def handle_thermal(conn) -> None:
-    """Phase 2: on each thermal msg, update shared state under lock, append to arrivals, evaluate."""
+def handle_thermal(conn: socket.socket) -> None:
+    """Phase 2: update shared state under lock, append to arrivals, evaluate."""
 
-    def on_msg(msg, rx_ns: int):
-        global last_thermal, last_thermal_rx_ns, thermal_arrivals
+    def on_msg(msg: Dict[str, Any], rx_ns: int):
+        global last_thermal, last_thermal_rx_ns, thermal_arrivals, first_thermal_seen_s
         now_s = rx_ns / 1e9
         with lock:
+            if first_thermal_seen_s is None:
+                first_thermal_seen_s = now_s
             last_thermal = msg
             last_thermal_rx_ns = rx_ns
             thermal_arrivals.append(now_s)
@@ -228,13 +240,15 @@ def handle_thermal(conn) -> None:
     recv_lines(conn, on_msg)
 
 
-def handle_imagery(conn) -> None:
-    """Phase 2: on each imagery msg, update shared state under lock, append to arrivals, evaluate."""
+def handle_imagery(conn: socket.socket) -> None:
+    """Phase 2: update shared state under lock, append to arrivals, evaluate."""
 
-    def on_msg(msg, rx_ns: int):
-        global last_imagery, last_imagery_rx_ns, imagery_arrivals
+    def on_msg(msg: Dict[str, Any], rx_ns: int):
+        global last_imagery, last_imagery_rx_ns, imagery_arrivals, first_imagery_seen_s
         now_s = rx_ns / 1e9
         with lock:
+            if first_imagery_seen_s is None:
+                first_imagery_seen_s = now_s
             last_imagery = msg
             last_imagery_rx_ns = rx_ns
             imagery_arrivals.append(now_s)
@@ -275,46 +289,90 @@ def server(port: int, handler, name: str) -> None:
         threading.Thread(target=handler, args=(conn,), daemon=True).start()
 
 
+def _stream_drop_stats(
+    stream_name: str,
+    arrivals: deque,
+    expected_hz: float,
+    first_seen_s: Optional[float],
+    now_s: float,
+    window_s: float,
+) -> Tuple[Optional[float], float, float]:
+    """
+    Returns:
+      drop_rate (None if stream not started), recv_count, expected_count
+    Uses an "effective window" so startup doesn't look like 100% drop.
+    """
+    if first_seen_s is None:
+        return None, 0.0, 0.0
+
+    effective_window = min(window_s, max(0.0, now_s - first_seen_s))
+    if effective_window <= 0.0:
+        return None, 0.0, 0.0
+
+    # Make sure deque only contains last window_s worth of data
+    prune_old(arrivals, now_s, window_s)
+
+    recv_count = float(len(arrivals))
+    expected_count = expected_hz * effective_window
+    if expected_count <= 0:
+        return None, recv_count, expected_count
+
+    drop = clamp01(1.0 - (recv_count / expected_count))
+    return drop, recv_count, expected_count
+
+
 def monitoring_thread() -> None:
     """
     Phase 2: Every MONITOR_WINDOW_S seconds, compute drop rate.
-    If drop > 50% for either stream, stop simulation.
+    Fix: do NOT enforce stop until a stream has actually started (seen at least 1 packet).
+    Fix: expected packets based on effective window since first packet, to avoid startup false positives.
     """
     print("[MONITOR] Waiting 5s for workers to connect...")
     time.sleep(5)
 
-    start = time.time()
+    start_s = time.time()
     while True:
         time.sleep(MONITOR_WINDOW_S)
 
-        now = time.time()
+        now_s = time.time()
+        up_s = now_s - start_s
+
         with lock:
-            prune_old(thermal_arrivals, now, MONITOR_WINDOW_S)
-            prune_old(imagery_arrivals, now, MONITOR_WINDOW_S)
+            t_drop, t_recv, t_exp = _stream_drop_stats(
+                "thermal", thermal_arrivals, EXPECTED_THERMAL_HZ, first_thermal_seen_s, now_s, MONITOR_WINDOW_S
+            )
+            i_drop, i_recv, i_exp = _stream_drop_stats(
+                "imagery", imagery_arrivals, EXPECTED_IMAGERY_HZ, first_imagery_seen_s, now_s, MONITOR_WINDOW_S
+            )
 
-            thermal_recv = len(thermal_arrivals)
-            imagery_recv = len(imagery_arrivals)
+        # Print readable monitor line
+        def fmt(drop: Optional[float], recv: float, exp: float) -> str:
+            if drop is None:
+                return "not_started"
+            return f"{recv:.0f}/{exp:.0f} drop={drop:.0%}"
 
-        thermal_expected = EXPECTED_THERMAL_HZ * MONITOR_WINDOW_S
-        imagery_expected = EXPECTED_IMAGERY_HZ * MONITOR_WINDOW_S
+        print(
+            f"[MONITOR] up={up_s:.0f}s window={MONITOR_WINDOW_S:.0f}s "
+            f"thermal={fmt(t_drop, t_recv, t_exp)} "
+            f"imagery={fmt(i_drop, i_recv, i_exp)}"
+        )
 
-        thermal_drop = clamp01(1.0 - (thermal_recv / thermal_expected if thermal_expected > 0 else 0.0))
-        imagery_drop = clamp01(1.0 - (imagery_recv / imagery_expected if imagery_expected > 0 else 0.0))
-
-        up = time.time() - start
-        print(f"[MONITOR] up={up:.0f}s window={MONITOR_WINDOW_S:.0f}s "
-              f"thermal_recv={thermal_recv:.0f}/{thermal_expected:.0f} drop={thermal_drop:.0%} "
-              f"imagery_recv={imagery_recv:.0f}/{imagery_expected:.0f} drop={imagery_drop:.0%}")
-
-        if thermal_server_up and thermal_drop > DROP_STOP_THRESHOLD:
-            print(f"[STOP] Thermal drop rate {thermal_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. Stopping simulation.")
+        # Enforce stop ONLY if the server is up AND the stream has started
+        if thermal_server_up and t_drop is not None and t_drop > DROP_STOP_THRESHOLD:
+            print(
+                f"[STOP] Thermal drop rate {t_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. "
+                "Stopping simulation."
+            )
             logfile.close()
-            os._exit(2)
+            sys.exit(2)
 
-        if imagery_server_up and imagery_drop > DROP_STOP_THRESHOLD:
-            print(f"[STOP] Imagery drop rate {imagery_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. Stopping simulation.")
+        if imagery_server_up and i_drop is not None and i_drop > DROP_STOP_THRESHOLD:
+            print(
+                f"[STOP] Imagery drop rate {i_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. "
+                "Stopping simulation."
+            )
             logfile.close()
-            os._exit(2)
+            sys.exit(2)
 
 
 def main() -> None:
@@ -331,12 +389,11 @@ def main() -> None:
     # Phase 1/2 CSV
     logfile = open(FUSION_LOG_CSV, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(logfile)
-    csv_writer.writerow([
-        "fusion_id", "utc_iso", "dt_s", "max_temp", "imagery_fire", "decision",
-        "thermal_shape", "num_detections"
-    ])
+    csv_writer.writerow(
+        ["fusion_id", "utc_iso", "dt_s", "max_temp", "imagery_fire", "decision", "thermal_shape", "num_detections"]
+    )
 
-    # Phase 3 JSONL
+    # Phase 3 JSONL: clear file at startup
     with open(LATENCY_LOG_JSONL, "w", encoding="utf-8") as f:
         f.write("")
 
