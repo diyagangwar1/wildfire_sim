@@ -1,7 +1,8 @@
 """
-Mininet Topology for Wildfire Multi-Drone Simulation
-Phases implemented:
-- Phase 2 (Robustness testing): supports loss
+Mininet Topology for Wildfire Multi-Drone Simulation (Phases 1–3)
+
+Phases supported by topology:
+- Phase 2 (Robustness): supports loss
 - Phase 3 (Timing/Latency): supports asymmetric delay per link (thermal vs imagery)
 
 Topology:
@@ -18,10 +19,10 @@ Example:
 """
 
 from __future__ import annotations
-import argparse
 
+import argparse
 from mininet.net import Mininet
-from mininet.node import OVSSwitch
+from mininet.node import OVSBridge
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
@@ -29,21 +30,23 @@ from mininet.log import setLogLevel
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--thermal-delay", type=int, default=0, help="Delay (ms) on thermal link")
-    p.add_argument("--imagery-delay", type=int, default=0, help="Delay (ms) on imagery link")
-    p.add_argument("--thermal-loss", type=float, default=0.0, help="Loss (%) on thermal link")
-    p.add_argument("--imagery-loss", type=float, default=0.0, help="Loss (%) on imagery link")
+    p.add_argument("--thermal-delay", type=int, default=0, help="Delay (ms) on thermal link (s1<->h2)")
+    p.add_argument("--imagery-delay", type=int, default=0, help="Delay (ms) on imagery link (s1<->h3)")
+    p.add_argument("--thermal-loss", type=float, default=0.0, help="Loss (%%) on thermal link (s1<->h2)")
+    p.add_argument("--imagery-loss", type=float, default=0.0, help="Loss (%%) on imagery link (s1<->h3)")
     p.add_argument("--bw", type=float, default=100.0, help="Bandwidth (Mbps) for all links")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
     setLogLevel("info")
 
-    # IMPORTANT: No OpenFlow controller needed for this project
-    net = Mininet(controller=None, switch=OVSSwitch, link=TCLink, autoSetMacs=True)
+    # IMPORTANT:
+    # Use OVSBridge (L2 learning switch) so traffic forwards WITHOUT needing ovs-controller.
+    # This avoids failures like: "Cannot find required executable ovs-controller"
+    # and avoids "drop=100%" due to no forwarding.
+    net = Mininet(controller=None, switch=OVSBridge, link=TCLink, autoSetMacs=True)
 
     s1 = net.addSwitch("s1")
 
@@ -51,10 +54,10 @@ def main() -> None:
     h2 = net.addHost("h2")  # thermal
     h3 = net.addHost("h3")  # imagery
 
-    # Controller link (no artificial delay here)
+    # Controller host to switch (keep clean)
     net.addLink(h1, s1, bw=args.bw)
 
-    # Thermal link
+    # Thermal link (s1<->h2)
     net.addLink(
         h2, s1,
         bw=args.bw,
@@ -62,7 +65,7 @@ def main() -> None:
         loss=args.thermal_loss,
     )
 
-    # Imagery link
+    # Imagery link (s1<->h3)
     net.addLink(
         h3, s1,
         bw=args.bw,
