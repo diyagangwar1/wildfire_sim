@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import csv
+import os
 from collections import deque
 from typing import Any, Dict, Optional, Tuple
 
@@ -279,6 +280,9 @@ def monitoring_thread() -> None:
     Phase 2: Every MONITOR_WINDOW_S seconds, compute drop rate.
     If drop > 50% for either stream, stop simulation.
     """
+    print("[MONITOR] Waiting 5s for workers to connect...")
+    time.sleep(5)
+
     start = time.time()
     while True:
         time.sleep(MONITOR_WINDOW_S)
@@ -305,12 +309,12 @@ def monitoring_thread() -> None:
         if thermal_server_up and thermal_drop > DROP_STOP_THRESHOLD:
             print(f"[STOP] Thermal drop rate {thermal_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. Stopping simulation.")
             logfile.close()
-            sys.exit(2)
+            os._exit(2)
 
         if imagery_server_up and imagery_drop > DROP_STOP_THRESHOLD:
             print(f"[STOP] Imagery drop rate {imagery_drop:.0%} exceeded {DROP_STOP_THRESHOLD:.0%}. Stopping simulation.")
             logfile.close()
-            sys.exit(2)
+            os._exit(2)
 
 
 def main() -> None:
