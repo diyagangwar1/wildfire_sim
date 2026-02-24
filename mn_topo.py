@@ -42,19 +42,19 @@ def main() -> None:
 
     setLogLevel("info")
 
+    # IMPORTANT: No OpenFlow controller needed for this project
     net = Mininet(controller=None, switch=OVSSwitch, link=TCLink, autoSetMacs=True)
 
-    c0 = net.addController("c0")
     s1 = net.addSwitch("s1")
 
     h1 = net.addHost("h1")  # controller
     h2 = net.addHost("h2")  # thermal
     h3 = net.addHost("h3")  # imagery
 
-    # Controller to switch (usually keep clean / no extra delay)
+    # Controller link (no artificial delay here)
     net.addLink(h1, s1, bw=args.bw)
 
-    # Thermal link: asymmetric from imagery
+    # Thermal link
     net.addLink(
         h2, s1,
         bw=args.bw,
