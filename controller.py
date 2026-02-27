@@ -434,6 +434,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Remove stale file at outdir path if it's a plain file (not a directory)
+    if os.path.exists(args.outdir) and not os.path.isdir(args.outdir):
+        os.remove(args.outdir)
     os.makedirs(args.outdir, exist_ok=True)
     FUSION_LOG_CSV = os.path.join(args.outdir, "fusion_log.csv")
     LATENCY_LOG_JSONL = os.path.join(args.outdir, "latency_log.jsonl")
