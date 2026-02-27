@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--imagery-delay", type=int, default=0, help="Delay (ms) on imagery link (s1<->h3)")
     p.add_argument("--thermal-loss", type=float, default=0.0, help="Loss (%%) on thermal link (s1<->h2)")
     p.add_argument("--imagery-loss", type=float, default=0.0, help="Loss (%%) on imagery link (s1<->h3)")
-    p.add_argument("--bw", type=float, default=100.0, help="Bandwidth (Mbps) for all links")
+    p.add_argument("--bw", type=float, default=1.0, help="Bandwidth (Mbps) for all links (keep low to avoid tc quantum warnings)")
     return p.parse_args()
 
 
