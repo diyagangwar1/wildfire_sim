@@ -4,6 +4,8 @@ Wildfire Multi-Drone Simulation — Ground Station Controller
 Phase 1: Fusion logic (thermal max temp + imagery fire label + time window)
 Phase 2: Port robustness, drop monitoring (rolling window), stop condition, threading + locks
 Phase 3: GPS/UTC timestamps, latency breakdown, latency_log.jsonl
+Phase 4: Rolling window thresholding — fire decision requires K consecutive confirmations
+Phase 5: (controller-side) Accepts drone position from workers; logs distance info
 
 Listens on TCP 5001 (thermal) and TCP 5002 (imagery).
 """
@@ -35,6 +37,13 @@ EXPECTED_IMAGERY_HZ = 2.0
 MONITOR_WINDOW_S = 10.0
 DROP_STOP_THRESHOLD = 0.50  # stop if drop rate > 50%
 
+# Phase 4: Rolling-window thresholding
+# A fire is only declared when at least FIRE_CONFIRM_K of the last
+# FIRE_WINDOW_K fusion evaluations independently meet the fire criteria.
+# Set FIRE_CONFIRM_K == 1 to get original single-timestep behaviour.
+FIRE_WINDOW_K: int = 5      # sliding window size (number of fusion events)
+FIRE_CONFIRM_K: int = 3     # minimum confirmations required within the window
+
 # Output logs
 LATENCY_LOG_JSONL = "latency_log.jsonl"
 FUSION_LOG_CSV = "fusion_log.csv"
@@ -60,6 +69,10 @@ imagery_server_up = False
 
 # Phase 3: fusion id for logging
 fusion_id = 0
+
+# Phase 4: sliding window of per-event raw fire signals
+# Each entry is True if that fusion event individually met ALL three criteria.
+fire_signal_window: deque = deque(maxlen=FIRE_WINDOW_K)
 
 # CSV file handle (opened at startup)
 logfile = None
@@ -130,10 +143,16 @@ def recv_lines(conn: socket.socket, on_msg) -> None:
 
 def evaluate() -> None:
     """
-    Fuse latest thermal + imagery. Phase 1 logic + Phase 3 latency logging.
+    Fuse latest thermal + imagery.
+    Phase 1/2: single-event fire criteria.
+    Phase 3: latency logging.
+    Phase 4: rolling-window thresholding — final decision requires
+             FIRE_CONFIRM_K confirmations in the last FIRE_WINDOW_K events.
+    Phase 5: log drone distances if provided by workers.
     Must be called with lock held.
     """
-    global last_thermal, last_imagery, last_thermal_rx_ns, last_imagery_rx_ns, fusion_id
+    global last_thermal, last_imagery, last_thermal_rx_ns, last_imagery_rx_ns
+    global fusion_id, fire_signal_window
 
     if not last_thermal or not last_imagery:
         return
@@ -158,7 +177,17 @@ def evaluate() -> None:
         dets = i.get("detections", [])
         fire = imagery_has_fire(dets)
 
-        decision = (max_temp > TEMP_THRESHOLD) and fire and (dt_s <= TIME_WINDOW_S)
+        # Phase 4: per-event raw signal
+        raw_signal = (max_temp > TEMP_THRESHOLD) and fire and (dt_s <= TIME_WINDOW_S)
+
+        # Push raw signal into the sliding window (deque auto-trims to maxlen)
+        fire_signal_window.append(raw_signal)
+
+        # Rolling decision: confirmed only if enough recent events agree
+        confirmations = sum(fire_signal_window)
+        decision = confirmations >= FIRE_CONFIRM_K
+
+        window_fill = len(fire_signal_window)
 
         fusion_end_ns = utc_ns()
 
@@ -176,19 +205,28 @@ def evaluate() -> None:
 
         num_dets = len(dets) if isinstance(dets, list) else 0
 
+        # Phase 5: log drone distances if provided by workers
+        thermal_dist = t.get("distance_m")
+        imagery_dist = i.get("distance_m")
+
         print(
             f"[FUSION] dt={dt_s:.3f}s temp={max_temp:.1f} fire={fire} "
-            f"shape={shape_str} decision={decision}"
+            f"shape={shape_str} raw={raw_signal} "
+            f"window={confirmations}/{window_fill} decision={decision}"
         )
 
-        # Phase 1/2 CSV
+        # Phase 1/2 CSV (Phase 4/5 columns added)
         iso = utc_iso(fusion_end_ns)
-        csv_writer.writerow(
-            [fusion_id, iso, f"{dt_s:.6f}", f"{max_temp:.3f}", fire, decision, shape_str, num_dets]
-        )
+        csv_writer.writerow([
+            fusion_id, iso, f"{dt_s:.6f}", f"{max_temp:.3f}", fire,
+            raw_signal, confirmations, window_fill, decision,
+            shape_str, num_dets,
+            "" if thermal_dist is None else f"{thermal_dist:.1f}",
+            "" if imagery_dist is None else f"{imagery_dist:.1f}",
+        ])
         logfile.flush()
 
-        # Phase 3 JSONL
+        # Phase 3 JSONL (Phase 4/5 fields added)
         rec = {
             "fusion_id": fusion_id,
             "fusion_done_ns": fusion_end_ns,
@@ -207,11 +245,20 @@ def evaluate() -> None:
             "dt_s": dt_s,
             "max_temp": max_temp,
             "imagery_fire": fire,
+            # Phase 4 fields
+            "raw_signal": raw_signal,
+            "window_confirmations": confirmations,
+            "window_fill": window_fill,
+            "fire_window_k": FIRE_WINDOW_K,
+            "fire_confirm_k": FIRE_CONFIRM_K,
             "decision": decision,
             "thermal_shape": shape_str,
             "num_detections": num_dets,
             "e2e_ns": e2e_ns,
             "e2e_ms": e2e_ms,
+            # Phase 5 fields
+            "thermal_distance_m": thermal_dist,
+            "imagery_distance_m": imagery_dist,
         }
         with open(LATENCY_LOG_JSONL, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
@@ -385,13 +432,17 @@ def main() -> None:
     print(f"[CTRL] TEMP_THRESHOLD={TEMP_THRESHOLD} TIME_WINDOW={TIME_WINDOW_S}s")
     print(f"[CTRL] Monitor: window={MONITOR_WINDOW_S}s stop_if_drop>{DROP_STOP_THRESHOLD:.0%}")
     print(f"[CTRL] Expected rates: thermal={EXPECTED_THERMAL_HZ}Hz imagery={EXPECTED_IMAGERY_HZ}Hz")
+    print(f"[CTRL] Phase 4 rolling window: K={FIRE_WINDOW_K} confirm={FIRE_CONFIRM_K}")
 
-    # Phase 1/2 CSV
+    # Phase 1/2 CSV (Phase 4/5 columns)
     logfile = open(FUSION_LOG_CSV, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(logfile)
-    csv_writer.writerow(
-        ["fusion_id", "utc_iso", "dt_s", "max_temp", "imagery_fire", "decision", "thermal_shape", "num_detections"]
-    )
+    csv_writer.writerow([
+        "fusion_id", "utc_iso", "dt_s", "max_temp", "imagery_fire",
+        "raw_signal", "window_confirmations", "window_fill", "decision",
+        "thermal_shape", "num_detections",
+        "thermal_distance_m", "imagery_distance_m",
+    ])
 
     # Phase 3 JSONL: clear file at startup
     with open(LATENCY_LOG_JSONL, "w", encoding="utf-8") as f:

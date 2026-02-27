@@ -116,9 +116,14 @@ Let it run ~60s, then Ctrl+C processes as needed.
 | `dt_s` | Time difference between streams |
 | `max_temp` | Maximum temperature (°C) |
 | `imagery_fire` | Boolean — any "fire" label |
-| `decision` | Final fusion decision |
+| `raw_signal` | Phase 4: single-timestep fire check |
+| `window_confirmations` | Phase 4: count of positive signals in window |
+| `window_fill` | Phase 4: current window size |
+| `decision` | Final fusion decision (rolling-window) |
 | `thermal_shape` | Data dimensions (e.g. `4x4`, `1d:8`) |
 | `num_detections` | Count of bounding boxes |
+| `thermal_distance_m` | Phase 5: thermal drone distance (m) |
+| `imagery_distance_m` | Phase 5: imagery drone distance (m) |
 
 **latency_log.jsonl** (one JSON object per line) includes:
 
@@ -139,6 +144,9 @@ Generates:
 
 - `plots/latency_contribution_pie.png` — mean % contribution (thermal proc, thermal net, imagery proc, imagery net, fusion proc)
 - `plots/e2e_latency_timeseries.png` — E2E latency over fusion events
+- `plots/phase4_rolling_window.png` — raw signal vs rolling decision, confirmations vs threshold
+- `plots/phase5_drone_distance.png` — both drones' distance over time
+- `plots/phase5_e2e_vs_distance.png` — E2E latency vs drone distance scatter
 
 ---
 
@@ -147,8 +155,10 @@ Generates:
 | Phase | Features |
 |-------|----------|
 | **Phase 1** | Probabilistic fire, variable shapes (2D + 1D), empty detections, overlapping boxes |
-| **Phase 2** | **Controller**: Port robustness (continue if one bind fails), rolling-window drop monitoring, stop if drop > 50%. **Workers**: Dropout simulation (`DROP_PROB`), reconnect loop, rate monitoring, staleness warnings |
+| **Phase 2** | **Controller**: Port robustness (continue if one bind fails), rolling-window drop monitoring, stop if drop > 50%. **Workers**: Dropout simulation, reconnect loop |
 | **Phase 3** | GPS/UTC timestamps, latency breakdown, `latency_log.jsonl`, asymmetric delay/loss in topology |
+| **Phase 4** | Rolling window thresholding — fire decision requires K confirmations in last K events |
+| **Phase 5** | Distance-based drop probability — drones random-walk in 3D, drop_prob ∝ distance |
 
 ### Phase 2 Controller Features (restored)
 
@@ -206,12 +216,12 @@ wildfire_sim/
 
 ---
 
-## Next Steps (Phase 4–5)
+## Phase 4 & 5 (Implemented)
 
-- **Phase 4**: Rolling window thresholding, smoothing/filtering
-- **Phase 5**: Distance-based drop probability
+- **Phase 4**: Rolling window thresholding (`FIRE_WINDOW_K=5`, `FIRE_CONFIRM_K=3`)
+- **Phase 5**: Distance-based drop probability (drone 3D random-walk, `drop_prob = BASE + SLOPE × distance`)
 
-**Phase 3 experiments to run:**
+**Phase 6 experiments to run:**
 
 - Sweep asymmetric delay values and collect multiple runs
 - Sweep send rate (`SEND_HZ` in workers) and Mininet loss
