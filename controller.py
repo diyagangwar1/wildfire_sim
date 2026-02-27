@@ -12,8 +12,10 @@ Listens on TCP 5001 (thermal) and TCP 5002 (imagery).
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import os
 import socket
 import sys
 import threading
@@ -44,7 +46,7 @@ DROP_STOP_THRESHOLD = 0.50  # stop if drop rate > 50%
 FIRE_WINDOW_K: int = 5      # sliding window size (number of fusion events)
 FIRE_CONFIRM_K: int = 3     # minimum confirmations required within the window
 
-# Output logs
+# Output logs (paths set at startup from --outdir)
 LATENCY_LOG_JSONL = "latency_log.jsonl"
 FUSION_LOG_CSV = "fusion_log.csv"
 
@@ -423,12 +425,24 @@ def monitoring_thread() -> None:
 
 
 def main() -> None:
-    global logfile, csv_writer
+    global logfile, csv_writer, LATENCY_LOG_JSONL, FUSION_LOG_CSV
+
+    parser = argparse.ArgumentParser(description="Wildfire Controller")
+    parser.add_argument(
+        "--outdir", default=".",
+        help="Directory to write fusion_log.csv and latency_log.jsonl (created if missing)"
+    )
+    args = parser.parse_args()
+
+    os.makedirs(args.outdir, exist_ok=True)
+    FUSION_LOG_CSV = os.path.join(args.outdir, "fusion_log.csv")
+    LATENCY_LOG_JSONL = os.path.join(args.outdir, "latency_log.jsonl")
 
     if THERMAL_PORT == IMAGERY_PORT:
         raise SystemExit("Thermal and imagery ports must be different.")
 
     print("[CTRL] Starting...")
+    print(f"[CTRL] Output dir: {os.path.abspath(args.outdir)}")
     print(f"[CTRL] TEMP_THRESHOLD={TEMP_THRESHOLD} TIME_WINDOW={TIME_WINDOW_S}s")
     print(f"[CTRL] Monitor: window={MONITOR_WINDOW_S}s stop_if_drop>{DROP_STOP_THRESHOLD:.0%}")
     print(f"[CTRL] Expected rates: thermal={EXPECTED_THERMAL_HZ}Hz imagery={EXPECTED_IMAGERY_HZ}Hz")
