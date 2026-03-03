@@ -10,6 +10,7 @@ Sends imagery detections over TCP to controller on port 5002.
 """
 
 from __future__ import annotations
+import argparse
 import socket
 import json
 import math
@@ -18,13 +19,14 @@ import random
 import sys
 from typing import Any, Dict, List, Tuple
 
-from gps_time import utc_ns, utc_iso
+from gps_time import utc_ns, utc_iso, sleep_to_next_tick, is_fire_window
 
 # --- Network ---
 PORT = 5002
 
 # --- Phase 2: base dropout / robustness ---
-BASE_DROP_PROB = 0.05
+# Overridden at runtime by --base-drop-prob; set to 0.0 for clean experiments.
+BASE_DROP_PROB = 0.0
 RECONNECT_SLEEP_S = 1.0
 
 # --- Send behavior ---
@@ -38,12 +40,15 @@ MAX_DETECTIONS = 3
 # --- Phase 5: Distance-based drop probability ---
 # Imagery drone starts at a different position from thermal drone.
 CONTROLLER_POS: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-DRONE_START_POS: Tuple[float, float, float] = (-60.0, 40.0, 25.0)  # different start from thermal
-DIST_DROP_SLOPE: float = 0.001   # drop_prob per metre
+# XY < 50 m; Z higher than thermal (80 m) so 3D distance is dominated by height difference
+DRONE_START_POS: Tuple[float, float, float] = (-25.0, -15.0, 80.0)
+DIST_DROP_SLOPE: float = 0.001
 MAX_DROP_PROB: float = 0.80
-DRONE_STEP_M: float = 6.0       # imagery drone moves slightly faster
+DRONE_STEP_M: float = 6.0        # imagery drone moves slightly faster
 DRONE_ALT_MIN_M: float = 10.0
-DRONE_ALT_MAX_M: float = 120.0
+DRONE_ALT_MAX_M: float = 200.0
+# Keep XY within this radius of controller
+XY_MAX_M: float = 45.0
 
 
 def _distance_3d(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
@@ -63,7 +68,13 @@ def _random_walk_3d(
     dy = random.uniform(-step_m, step_m)
     dz = random.uniform(-step_m / 2, step_m / 2)
     x, y, z = pos[0] + dx, pos[1] + dy, pos[2] + dz
+    # Clamp altitude
     z = max(DRONE_ALT_MIN_M, min(DRONE_ALT_MAX_M, z))
+    # Clamp XY radius so drone stays within realistic radio range
+    xy_dist = math.sqrt(x * x + y * y)
+    if xy_dist > XY_MAX_M:
+        scale = XY_MAX_M / xy_dist
+        x, y = x * scale, y * scale
     return (x, y, z)
 
 
@@ -92,7 +103,14 @@ def _rand_box(base: Tuple[int, int, int, int] | None = None) -> Tuple[int, int, 
 def gen_imagery() -> Dict[str, Any]:
     """
     Generate one imagery message with variable detections.
+
+    Fire model: clock-based phase (is_fire_window) correlates with thermal so
+    both sensors agree on "fire active" periods.
+    During a fire window: 80% chance each detection is labelled 'fire'.
+    Outside a fire window: 5% chance (occasional false positive).
     """
+    in_fire = is_fire_window()
+
     if random.random() < P_EMPTY:
         detections: List[Dict[str, Any]] = []
         shape = {"num_detections": 0}
@@ -104,9 +122,10 @@ def gen_imagery() -> Dict[str, Any]:
 
         fire_present = False
         for i in range(n):
-            # Overlap: use base for most boxes
             box = _rand_box(base if i > 0 else None)
-            label = "fire" if random.random() < P_FIRE_LABEL else random.choice(["smoke", "tree", "rock"])
+            # During fire window: high chance of fire label; outside: low chance
+            fire_p = 0.80 if in_fire else 0.05
+            label = "fire" if random.random() < fire_p else random.choice(["smoke", "tree", "rock"])
             conf = round(random.uniform(0.4, 0.99), 3)
 
             if label == "fire":
@@ -124,7 +143,7 @@ def gen_imagery() -> Dict[str, Any]:
         "sensor": "imagery",
         "shape": shape,
         "detections": detections,
-        "fire_sim": fire_present,  # debug/analysis only
+        "fire_sim": fire_present,
     }
 
 
@@ -139,11 +158,32 @@ def connect(host: str) -> socket.socket:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: python3 imagery_worker.py <CONTROLLER_IP>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Imagery Worker")
+    parser.add_argument("host", help="Controller IP address")
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="Random seed for reproducible drone trajectory. "
+             "Use the same seed across runs to isolate other variables.",
+    )
+    parser.add_argument(
+        "--base-drop-prob", type=float, default=BASE_DROP_PROB,
+        help=(
+            "Base packet drop probability (before distance scaling). "
+            "Set to 0 for clean experiments where only Mininet loss applies. "
+            f"Default: {BASE_DROP_PROB}"
+        ),
+    )
+    args = parser.parse_args()
 
-    host = sys.argv[1]
+    if args.seed is not None:
+        random.seed(args.seed)
+        print(f"[IMAGERY] Random seed set to {args.seed}")
+
+    global BASE_DROP_PROB
+    BASE_DROP_PROB = args.base_drop_prob
+    print(f"[IMAGERY] base_drop_prob={BASE_DROP_PROB}")
+
+    host = args.host
     seq = 0
     period = 1.0 / float(SEND_HZ)
 
@@ -160,7 +200,7 @@ def main() -> None:
         drop_prob = _drop_prob_from_distance(dist_m)
 
         if random.random() < drop_prob:
-            time.sleep(period)
+            sleep_to_next_tick(period)
             seq += 1
             continue
 
@@ -174,6 +214,8 @@ def main() -> None:
             "tx_ns": tx_ns,
             "tx_iso": utc_iso(tx_ns),
             "proc_ns": int(proc_end_ns - proc_start_ns),
+            # Ground-truth fire label (mirrors thermal's fire_window field)
+            "fire_window": is_fire_window(),
             # Phase 5 telemetry
             "drone_x": round(drone_pos[0], 2),
             "drone_y": round(drone_pos[1], 2),
@@ -193,7 +235,7 @@ def main() -> None:
                 pass
             sock = connect(host)
 
-        time.sleep(period)
+        sleep_to_next_tick(period)
 
 
 if __name__ == "__main__":

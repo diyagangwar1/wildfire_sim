@@ -105,9 +105,14 @@ def main() -> None:
     labels = list(parts.keys())
     values = list(parts.values())
 
-    plt.figure(figsize=(7, 7))
-    plt.pie(values, labels=labels, autopct="%1.1f%%", startangle=140)
-    plt.title(f"Mean E2E Latency Contribution{label}\n(mean={mean(e2e_ms):.0f}ms)")
+    # Labels include absolute ms so numbers can be compared with Orin / Alice's setup
+    abs_labels = [f"{l}\n{v:.1f} ms" for l, v in zip(labels, values)]
+    plt.figure(figsize=(8, 8))
+    plt.pie(values, labels=abs_labels, autopct="%1.1f%%", startangle=140)
+    plt.title(
+        f"Mean E2E Latency Contribution{label}\n"
+        f"(mean E2E = {mean(e2e_ms):.1f} ms  |  total components = {sum(values):.1f} ms)"
+    )
     pie_path = os.path.join(args.outdir, "latency_contribution_pie.png")
     plt.savefig(pie_path, dpi=200, bbox_inches="tight")
     plt.close()
@@ -212,6 +217,89 @@ def main() -> None:
         plt.savefig(sc_path, dpi=200, bbox_inches="tight")
         plt.close()
         print(f"Wrote {sc_path}")
+
+    # --- 6. Fire window hit / miss / false-alarm table -------------------------
+    # Only generated when fire_window ground-truth is present in the log.
+    if rows and "fire_window" in rows[0]:
+        fw   = [bool(r.get("fire_window", False)) for r in rows]
+        dec  = [bool(r.get("decision", False))    for r in rows]
+
+        TP = sum(1 for f, d in zip(fw, dec) if     f and     d)
+        FN = sum(1 for f, d in zip(fw, dec) if     f and not d)
+        FP = sum(1 for f, d in zip(fw, dec) if not f and     d)
+        TN = sum(1 for f, d in zip(fw, dec) if not f and not d)
+
+        total_fire    = TP + FN
+        total_no_fire = TN + FP
+        recall        = TP / total_fire    if total_fire    > 0 else float("nan")
+        precision     = TP / (TP + FP)    if (TP + FP)     > 0 else float("nan")
+        fpr           = FP / total_no_fire if total_no_fire > 0 else float("nan")
+        miss_rate     = FN / total_fire    if total_fire    > 0 else float("nan")
+
+        print(f"\nFire Window Hit/Miss{label}:")
+        print(f"  Fire events (TP+FN)  : {total_fire}")
+        print(f"  Hits (TP)            : {TP}   ({100*recall:.1f}% recall / hit-rate)")
+        print(f"  Misses (FN)          : {FN}   ({100*miss_rate:.1f}% miss-rate)")
+        print(f"  False alarms (FP)    : {FP}   ({100*fpr:.1f}% false-alarm rate)")
+        print(f"  True quiet (TN)      : {TN}")
+        print(f"  Precision            : {100*precision:.1f}%")
+
+        # Save as a PNG table
+        fig, ax = plt.subplots(figsize=(9, 4))
+        ax.axis("off")
+
+        col_labels = ["Metric", "Count / Rate", "Description"]
+        table_data = [
+            ["Fire window events (TP+FN)",
+             str(total_fire),
+             "Fusion events where ground-truth fire was active"],
+            ["Hits — True Positive (TP)",
+             f"{TP}  ({100*recall:.1f}% recall)",
+             "Fire window active AND decision = True"],
+            ["Misses — False Negative (FN)",
+             f"{FN}  ({100*miss_rate:.1f}% miss rate)",
+             "Fire window active AND decision = False"],
+            ["False Alarms — False Positive (FP)",
+             f"{FP}  ({100*fpr:.1f}% false-alarm rate)",
+             "No fire window AND decision = True"],
+            ["True Quiet — True Negative (TN)",
+             str(TN),
+             "No fire window AND decision = False"],
+            ["Precision",
+             f"{100*precision:.1f}%",
+             "Of all detections, fraction that were real fire"],
+        ]
+
+        tbl = ax.table(
+            cellText=table_data,
+            colLabels=col_labels,
+            loc="center",
+            cellLoc="left",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(10)
+        tbl.scale(1, 2.0)
+        tbl.auto_set_column_width([0, 1, 2])
+
+        # Header row
+        for j in range(3):
+            tbl[0, j].set_facecolor("#2c3e50")
+            tbl[0, j].set_text_props(color="white", fontweight="bold")
+        # Colour-code rows by outcome
+        row_colors = ["#d5f5e3", "#d5f5e3", "#fadbd8", "#fff3cd", "#eaf2ff", "#f8f9fa"]
+        for i, color in enumerate(row_colors):
+            for j in range(3):
+                tbl[i + 1, j].set_facecolor(color)
+
+        plt.title(
+            f"Fire Detection — Hit / Miss / False Alarm{label}",
+            fontsize=12, fontweight="bold", pad=12,
+        )
+        plt.tight_layout()
+        hm_path = os.path.join(args.outdir, "fire_hit_miss_table.png")
+        plt.savefig(hm_path, dpi=200, bbox_inches="tight")
+        plt.close()
+        print(f"Wrote {hm_path}")
 
 
 if __name__ == "__main__":

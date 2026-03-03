@@ -30,11 +30,13 @@ from mininet.log import setLogLevel
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--thermal-delay", type=int, default=0, help="Delay (ms) on thermal link (s1<->h2)")
-    p.add_argument("--imagery-delay", type=int, default=0, help="Delay (ms) on imagery link (s1<->h3)")
+    p.add_argument("--thermal-delay", type=float, default=0,
+                   help="Delay (ms) on thermal link (s1<->h2). Supports values > 1000 for >1 s delay.")
+    p.add_argument("--imagery-delay", type=float, default=0,
+                   help="Delay (ms) on imagery link (s1<->h3). Supports values > 1000 for >1 s delay.")
     p.add_argument("--thermal-loss", type=float, default=0.0, help="Loss (%%) on thermal link (s1<->h2)")
     p.add_argument("--imagery-loss", type=float, default=0.0, help="Loss (%%) on imagery link (s1<->h3)")
-    p.add_argument("--bw", type=float, default=1.0, help="Bandwidth (Mbps) for all links (keep low to avoid tc quantum warnings)")
+    p.add_argument("--bw", type=float, default=1.0, help="Bandwidth (Mbps) for all links")
     return p.parse_args()
 
 
@@ -81,9 +83,9 @@ def main() -> None:
     print("  h3 = imagery worker\n")
 
     print("[INFO] Example commands inside Mininet:")
-    print("  h1 python3 controller.py &")
-    print("  h2 python3 thermal_worker.py 10.0.0.1 &")
-    print("  h3 python3 imagery_worker.py 10.0.0.1 &\n")
+    print("  h1 python3 controller.py [--outdir results/baseline] [--sync-threshold-ms 5] &")
+    print("  h2 python3 thermal_worker.py 10.0.0.1 [--seed 42] &")
+    print("  h3 python3 imagery_worker.py 10.0.0.1 [--seed 42] &\n")
 
     CLI(net)
     net.stop()
