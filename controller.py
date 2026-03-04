@@ -45,13 +45,18 @@ MONITOR_WINDOW_S = 10.0
 DROP_STOP_THRESHOLD = 0.50  # stop if drop rate > 50%
 
 # Phase 4: Rolling-window thresholding
+# Window of 5, need 2/5 for a decision. This matches a ~25-35% raw fire rate
+# (probability of ≥2 hits in 5 trials at p=0.30 ≈ 83%) and gives meaningful
+# detection curves.  K=3 was too strict at these signal levels.
 FIRE_WINDOW_K: int = 5      # sliding window size (number of fusion events)
-FIRE_CONFIRM_K: int = 3     # minimum confirmations required within the window
+FIRE_CONFIRM_K: int = 2     # minimum confirmations required within the window
 
 # Phase 6: GPS-based pair matching
 # Keep the last SYNC_BUFFER_SIZE messages per stream.
 # Only fuse a pair if |tx_thermal - tx_imagery| <= SYNC_THRESHOLD_MS.
-# Set SYNC_THRESHOLD_MS very large (e.g. 2000) to get old "nearest always fused" behaviour.
+# 600ms = just over one 500ms send period: captures workers that land on
+# neighbouring ticks (VM scheduling jitter on Mininet) while still filtering
+# out stale cross-tick pairs.
 SYNC_BUFFER_SIZE: int = 10
 SYNC_THRESHOLD_MS: float = 5.0  # overridden by --sync-threshold-ms
 

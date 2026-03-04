@@ -407,12 +407,12 @@ def main() -> None:
                         help="Seconds to run each experiment (default: 60)")
     parser.add_argument("--outdir", default="results",
                         help="Root output directory; each run gets a sub-folder (default: results)")
-    parser.add_argument("--sync-threshold-ms", type=float, default=250.0,
+    parser.add_argument("--sync-threshold-ms", type=float, default=600.0,
                         help=(
-                            "GPS sync threshold for the controller (default: 250ms). "
-                            "With independent workers, 250ms ≈ half the 500ms send period "
-                            "and gives reliable pairing.  Use 5ms once workers are "
-                            "GPS-synchronized."
+                            "GPS sync threshold for the controller (default: 600ms). "
+                            "600ms = just over one 500ms send period, capturing workers "
+                            "that land on neighbouring ticks due to VM scheduling jitter "
+                            "while filtering out stale cross-tick pairs."
                         ))
     parser.add_argument("--only", nargs="+", metavar="NAME",
                         help="Run only these experiment names (use quotes for spaces)")
