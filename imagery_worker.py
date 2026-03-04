@@ -158,6 +158,7 @@ def connect(host: str) -> socket.socket:
 
 
 def main() -> None:
+    global BASE_DROP_PROB
     parser = argparse.ArgumentParser(description="Imagery Worker")
     parser.add_argument("host", help="Controller IP address")
     parser.add_argument(
@@ -179,7 +180,6 @@ def main() -> None:
         random.seed(args.seed)
         print(f"[IMAGERY] Random seed set to {args.seed}")
 
-    global BASE_DROP_PROB
     BASE_DROP_PROB = args.base_drop_prob
     print(f"[IMAGERY] base_drop_prob={BASE_DROP_PROB}")
 
