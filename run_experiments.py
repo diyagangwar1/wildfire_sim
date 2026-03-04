@@ -85,18 +85,9 @@ def run_one(
     duration: int,
     sync_threshold_ms: float,
 ) -> None:
-    """Run a single Mininet experiment and generate per-run plots."""
-    # Import here so the script can still be used for --plots-only without mininet
-    try:
-        from mininet.net import Mininet
-        from mininet.node import OVSBridge
-        from mininet.link import TCLink
-        from mininet.log import setLogLevel
-    except ImportError:
-        print("[ERROR] Mininet not found.  Run on the VM or install Mininet.")
-        sys.exit(1)
-
-    exp_dir = os.path.join(outdir, name)
+    """Run a single experiment via mn_topo.py --auto (fully isolated subprocess)."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    exp_dir = os.path.abspath(os.path.join(outdir, name))
     os.makedirs(exp_dir, exist_ok=True)
 
     print(f"\n{'='*64}")
@@ -107,67 +98,25 @@ def run_one(
     print(f"  output -> {exp_dir}")
     print(f"{'='*64}")
 
-    setLogLevel("warning")
+    # Each experiment runs as its own subprocess so Mininet starts completely
+    # fresh — no residual OVS bridge / namespace state from previous runs.
+    cmd = [
+        sys.executable,
+        os.path.join(script_dir, "mn_topo.py"),
+        "--thermal-delay", str(thermal_delay),
+        "--imagery-delay", str(imagery_delay),
+        "--thermal-loss",  str(thermal_loss),
+        "--imagery-loss",  str(imagery_loss),
+        "--auto",
+        "--outdir",            exp_dir,
+        "--seed",              str(seed),
+        "--duration",          str(duration),
+        "--sync-threshold-ms", str(sync_threshold_ms),
+        "--base-drop-prob",    "0",
+    ]
+    subprocess.run(cmd, check=False)
 
-    net = Mininet(controller=None, switch=OVSBridge, link=TCLink, autoSetMacs=True)
-    s1 = net.addSwitch("s1")
-    h1 = net.addHost("h1")   # controller
-    h2 = net.addHost("h2")   # thermal worker
-    h3 = net.addHost("h3")   # imagery worker
-
-    net.addLink(h1, s1, bw=1.0)
-    net.addLink(h2, s1, bw=1.0,
-                delay=f"{thermal_delay}ms", loss=thermal_loss)
-    net.addLink(h3, s1, bw=1.0,
-                delay=f"{imagery_delay}ms", loss=imagery_loss)
-
-    net.start()
-
-    # Start controller
-    ctrl_log_path = os.path.join(exp_dir, "controller.log")
-    ctrl_log = open(ctrl_log_path, "w")
-    ctrl_proc = h1.popen(
-        ["python3", "controller.py",
-         "--outdir", exp_dir,
-         "--sync-threshold-ms", str(sync_threshold_ms)],
-        stdout=ctrl_log, stderr=ctrl_log,
-    )
-    time.sleep(2)   # give controller time to bind sockets
-
-    # Start workers
-    thermal_log = open(os.path.join(exp_dir, "thermal.log"), "w")
-    imagery_log = open(os.path.join(exp_dir, "imagery.log"), "w")
-
-    thermal_proc = h2.popen(
-        ["python3", "thermal_worker.py", h1.IP(),
-         "--seed", str(seed), "--base-drop-prob", "0"],
-        stdout=thermal_log, stderr=thermal_log,
-    )
-    imagery_proc = h3.popen(
-        ["python3", "imagery_worker.py", h1.IP(),
-         "--seed", str(seed), "--base-drop-prob", "0"],
-        stdout=imagery_log, stderr=imagery_log,
-    )
-
-    print(f"  [running {duration}s] ", end="", flush=True)
-    for _ in range(duration):
-        time.sleep(1)
-        print(".", end="", flush=True)
-    print(" done")
-
-    # Graceful shutdown
-    for proc in [thermal_proc, imagery_proc, ctrl_proc]:
-        proc.terminate()
-        try:
-            proc.wait(timeout=4)
-        except Exception:
-            proc.kill()
-
-    for f in [ctrl_log, thermal_log, imagery_log]:
-        f.close()
-
-    net.stop()
-    # Clean up any stale Mininet state
+    # Clean residual OVS state before the next run
     subprocess.run(["mn", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
@@ -176,14 +125,15 @@ def run_one(
     if os.path.exists(latency_log) and os.path.getsize(latency_log) > 0:
         plots_dir = os.path.join(exp_dir, "plots")
         subprocess.run(
-            ["python3", "analyze_latency.py", latency_log,
-             "--outdir", plots_dir, "--label", name],
+            [sys.executable,
+             os.path.join(script_dir, "analyze_latency.py"),
+             latency_log, "--outdir", plots_dir, "--label", name],
             check=False,
         )
         print(f"  Per-run plots -> {plots_dir}")
     else:
         print(f"  WARNING: {latency_log} is empty — no fusions recorded.")
-        print(f"  Try increasing --sync-threshold-ms (currently {sync_threshold_ms})")
+        print(f"  Check {exp_dir}/controller.log  and  {exp_dir}/thermal.log for details.")
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +432,11 @@ def main() -> None:
     os.makedirs(args.outdir, exist_ok=True)
 
     if not args.plots_only:
+        # Clean up any stale Mininet/OVS state from previous crashed runs
+        print("[RUNNER] Cleaning up stale Mininet state ...")
+        subprocess.run(["mn", "-c"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+
         print(f"\n[RUNNER] {len(exps)} experiment(s) to run")
         print(f"[RUNNER] seed={args.seed}  duration={args.duration}s  "
               f"outdir={args.outdir}  sync={args.sync_threshold_ms}ms\n")
