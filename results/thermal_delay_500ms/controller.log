@@ -1,0 +1,92 @@
+[CTRL] Starting...
+[CTRL] Output dir: /home/diya/wildfire_sim/results/thermal_delay_500ms
+[CTRL] TEMP_THRESHOLD=100.0  TIME_WINDOW=0.5s  (pair dt must be <= 0.5s AND <= 600.0ms sync threshold)
+[CTRL] Monitor: window=10.0s  stop_if_drop>50%
+[CTRL] Expected rates: thermal=2.0Hz  imagery=2.0Hz
+[CTRL] Phase 4 rolling window: K=5  confirm=2
+[CTRL] GPS sync: buffer=10  threshold=600.0ms
+[SERVER] THERMAL listening on 0.0.0.0:5001
+[SERVER] IMAGERY listening on 0.0.0.0:5002
+[MONITOR] Waiting 5s for workers to connect...
+[SERVER] IMAGERY connection from ('10.0.0.3', 57644)
+[SERVER] THERMAL connection from ('10.0.0.2', 38550)
+[FUSION] dt=0.111s temp=71.2 fire=False shape=2x2 raw=False window=0/1 decision=False gt=none [TN]
+[FUSION] dt=0.003s temp=71.7 fire=False shape=4x4 raw=False window=0/2 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=130.8 fire=True shape=2x4 raw=True window=1/3 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=72.1 fire=False shape=1d:4 raw=False window=1/4 decision=False gt=none [TN]
+[MONITOR] up=10s window=10s thermal=16/20 drop=20% imagery=18/20 drop=10%
+[FUSION] dt=0.000s temp=134.7 fire=False shape=4x4 raw=False window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=72.1 fire=False shape=2x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=72.7 fire=False shape=3x3 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.001s temp=74.9 fire=False shape=3x3 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.001s temp=130.4 fire=True shape=1d:4 raw=True window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=133.1 fire=True shape=1d:8 raw=True window=2/5 decision=True gt=FIRE [TP]
+[MONITOR] up=20s window=10s thermal=19/20 drop=5% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=74.9 fire=False shape=4x4 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=69.7 fire=False shape=1d:2 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=140.1 fire=True shape=4x4 raw=True window=3/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=132.3 fire=True shape=4x4 raw=True window=3/5 decision=True gt=FIRE [TP]
+[MONITOR] up=30s window=10s thermal=19/20 drop=5% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=71.6 fire=False shape=2x4 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=75.7 fire=True shape=3x3 raw=False window=2/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=70.9 fire=False shape=2x2 raw=False window=2/5 decision=True gt=none [FP]
+[MONITOR] up=40s window=10s thermal=19/20 drop=5% imagery=20/20 drop=0%
+[FUSION] dt=0.000s temp=124.7 fire=False shape=2x2 raw=False window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=132.1 fire=True shape=3x3 raw=True window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.001s temp=71.9 fire=False shape=1d:2 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=71.3 fire=False shape=1d:8 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=73.5 fire=True shape=4x4 raw=False window=1/5 decision=False gt=FIRE [FN]
+[MONITOR] up=50s window=10s thermal=19/20 drop=5% imagery=17/20 drop=15%
+[FUSION] dt=0.000s temp=133.8 fire=False shape=2x4 raw=False window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=68.3 fire=True shape=1d:2 raw=False window=0/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=128.3 fire=False shape=1d:15 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=71.6 fire=True shape=3x3 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=132.8 fire=True shape=4x4 raw=True window=1/5 decision=False gt=FIRE [FN]
+[MONITOR] up=60s window=10s thermal=18/20 drop=10% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=75.9 fire=False shape=2x2 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=74.2 fire=False shape=4x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=125.2 fire=True shape=2x2 raw=True window=2/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=72.9 fire=False shape=1d:8 raw=False window=2/5 decision=True gt=none [FP]
+[MONITOR] up=70s window=10s thermal=18/20 drop=10% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=71.7 fire=False shape=2x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=126.2 fire=True shape=2x4 raw=True window=2/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=127.8 fire=True shape=4x4 raw=True window=3/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=72.8 fire=False shape=1d:8 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=72.1 fire=False shape=1d:8 raw=False window=2/5 decision=True gt=none [FP]
+[MONITOR] up=80s window=10s thermal=20/20 drop=0% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=72.1 fire=False shape=3x3 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=128.6 fire=True shape=1d:8 raw=True window=2/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=132.0 fire=False shape=4x4 raw=False window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=68.8 fire=False shape=1d:2 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=71.6 fire=False shape=1d:4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=128.5 fire=False shape=4x4 raw=False window=1/5 decision=False gt=none [TN]
+[MONITOR] up=90s window=10s thermal=19/20 drop=5% imagery=20/20 drop=0%
+[FUSION] dt=0.000s temp=131.0 fire=False shape=4x4 raw=False window=0/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=72.3 fire=False shape=3x3 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.001s temp=71.6 fire=False shape=2x2 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=132.4 fire=False shape=1d:8 raw=False window=0/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=129.7 fire=False shape=4x4 raw=False window=0/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=73.5 fire=False shape=3x3 raw=False window=0/5 decision=False gt=none [TN]
+[MONITOR] up=100s window=10s thermal=19/20 drop=5% imagery=18/20 drop=10%
+[FUSION] dt=0.000s temp=73.6 fire=False shape=4x4 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=71.5 fire=False shape=2x2 raw=False window=0/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=133.6 fire=True shape=2x2 raw=True window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=131.0 fire=True shape=3x3 raw=True window=2/5 decision=True gt=FIRE [TP]
+[MONITOR] up=110s window=10s thermal=20/20 drop=0% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=71.8 fire=False shape=2x4 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=73.5 fire=False shape=2x4 raw=False window=2/5 decision=True gt=none [FP]
+[FUSION] dt=0.000s temp=131.8 fire=True shape=1d:4 raw=True window=3/5 decision=True gt=FIRE [TP]
+[FUSION] dt=0.000s temp=73.1 fire=False shape=3x3 raw=False window=2/5 decision=True gt=none [FP]
+[MONITOR] up=120s window=10s thermal=20/20 drop=0% imagery=18/20 drop=10%
+[FUSION] dt=0.000s temp=72.3 fire=False shape=4x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=129.9 fire=False shape=1d:4 raw=False window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=71.7 fire=False shape=1d:15 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=72.8 fire=True shape=3x3 raw=False window=0/5 decision=False gt=none [TN]
+[MONITOR] up=130s window=10s thermal=16/20 drop=20% imagery=19/20 drop=5%
+[FUSION] dt=0.000s temp=135.9 fire=True shape=2x2 raw=True window=1/5 decision=False gt=FIRE [FN]
+[FUSION] dt=0.000s temp=72.0 fire=False shape=4x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=71.9 fire=True shape=4x4 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=72.8 fire=False shape=1d:15 raw=False window=1/5 decision=False gt=none [TN]
+[MONITOR] up=140s window=10s thermal=19/20 drop=5% imagery=17/20 drop=15%
+[FUSION] dt=0.000s temp=131.4 fire=False shape=1d:2 raw=False window=1/5 decision=False gt=none [TN]
+[FUSION] dt=0.000s temp=123.7 fire=True shape=2x2 raw=True window=1/5 decision=False gt=FIRE [FN]
