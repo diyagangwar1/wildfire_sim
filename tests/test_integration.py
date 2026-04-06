@@ -132,6 +132,11 @@ class TestEndToEndNoMininet(unittest.TestCase):
                     f"Got keys: {list(rec.keys())}"
                 )
 
+            # Inter-drone geometry (when workers send drone_x/y/z)
+            if rec.get("inter_drone_dist_m") is not None:
+                self.assertIsNotNone(rec.get("separation_xy_m"))
+                self.assertIsNotNone(rec.get("separation_dz_m"))
+
             # ── Assert 4: hit_miss is a valid label ──────────────────────────
             valid_labels = {"TP", "FP", "FN", "TN"}
             for line in lines[:10]:

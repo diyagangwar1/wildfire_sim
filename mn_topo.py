@@ -60,8 +60,8 @@ def parse_args() -> argparse.Namespace:
                    help="Random seed for workers")
     p.add_argument("--duration", type=int, default=60,
                    help="Seconds to run in auto mode")
-    p.add_argument("--sync-threshold-ms", type=float, default=600.0,
-                   help="GPS sync window passed to controller (ms)")
+    p.add_argument("--sync-threshold-ms", type=float, default=2000.0,
+                   help="GPS pair-matching window passed to controller (ms); default 2000 (2 s)")
     p.add_argument("--base-drop-prob", type=float, default=0.0,
                    help="Base packet drop probability for workers")
     return p.parse_args()

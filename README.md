@@ -88,13 +88,13 @@ Key flags:
 | `--seed` | 42 | Same seed for all runs (identical drone trajectories) |
 | `--duration` | 60 | Seconds per run (~15 min total for 14 runs) |
 | `--outdir` | `results` | Root folder; each run gets a subfolder |
-| `--sync-threshold-ms` | 250 | GPS match window (ms); 250 = half send period for unsynchronized workers |
+| `--sync-threshold-ms` | 2000 | GPS pair-matching window (ms); default 2 s (tune down if you want stricter tx alignment) |
 | `--only baseline cam_delay_100ms` | — | Run only specific experiments |
 | `--plots-only` | — | Skip runs; just re-generate plots from existing results |
 
 Outputs:
 - `results/<name>/` — per-run logs and plots
-- `results/sweep_plots/` — detection rate vs delay, latency vs delay, summary table
+- `results/sweep_plots/` — latency vs delay (mean/p95), loss curves, summary table
 
 ### Option B — Manual single run
 
@@ -103,7 +103,7 @@ Outputs:
 sudo python3 mn_topo.py --thermal-delay 0 --imagery-delay 100
 
 # Inside Mininet CLI:
-mininet> h1 python3 controller.py --outdir results/baseline --sync-threshold-ms 250 &
+mininet> h1 python3 controller.py --outdir results/baseline --sync-threshold-ms 2000 &
 mininet> h2 python3 thermal_worker.py 10.0.0.1 --seed 42 &
 mininet> h3 python3 imagery_worker.py 10.0.0.1 --seed 42 &
 mininet> h1 tail -f results/baseline/fusion_log.csv

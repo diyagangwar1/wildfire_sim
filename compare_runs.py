@@ -167,33 +167,30 @@ def main():
     plt.close()
     print("Wrote network_delay_per_stream.png")
 
-    # ── 4. Fire detection rate: raw vs rolling decision ──────────────────────
+    # ── 4. E2E p95 across runs (latency-focused) ─────────────────────────────
     fig, ax = plt.subplots(figsize=(10, 5))
-    raws = [data[l]["raw_pct"] for l in labels]
-    decs = [data[l]["dec_pct"] for l in labels]
-    ax.bar(x - 0.2, raws, 0.4, label="Raw signal rate (%)", color="#dd8452", alpha=0.9)
-    ax.bar(x + 0.2, decs, 0.4, label="Rolling decision rate (%)", color="#c44e52")
+    p95s = [data[l]["e2e_p95"] for l in labels]
+    ax.bar(x, p95s, 0.55, color="#c44e52", alpha=0.9, label="p95 E2E")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=10)
-    ax.set_ylabel("Rate (%)", fontsize=12)
-    ax.set_title("Fire Detection Rate: Raw Signal vs Rolling Window Decision", fontsize=13, fontweight="bold")
+    ax.set_ylabel("Latency (ms)", fontsize=12)
+    ax.set_title("End-to-End Latency p95 Across Runs", fontsize=13, fontweight="bold")
     ax.legend(fontsize=11)
     ax.yaxis.grid(True, alpha=0.4)
     ax.set_axisbelow(True)
-    for i, (r, d) in enumerate(zip(raws, decs)):
-        ax.text(i - 0.2, r + 0.2, f"{r:.1f}%", ha="center", fontsize=9)
-        ax.text(i + 0.2, d + 0.2, f"{d:.1f}%", ha="center", fontsize=9)
+    for i, p in enumerate(p95s):
+        ax.text(i, p + max(p95s) * 0.02, f"{p:.0f}", ha="center", fontsize=9)
     plt.tight_layout()
-    plt.savefig(os.path.join(args.outdir, "detection_rate_comparison.png"), dpi=200, bbox_inches="tight")
+    plt.savefig(os.path.join(args.outdir, "e2e_p95_comparison.png"), dpi=200, bbox_inches="tight")
     plt.close()
-    print("Wrote detection_rate_comparison.png")
+    print("Wrote e2e_p95_comparison.png")
 
     # ── 5. Summary table ─────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(13, 3.2))
     ax.axis("off")
 
     col_labels = ["Run", "Events", "E2E Mean", "E2E p50", "E2E p95",
-                  "Sync Gap", "Net (T)", "Net (I)", "Raw Fire", "Decision"]
+                  "Sync Gap", "Net (T)", "Net (I)"]
     rows_data = []
     for l in labels:
         d = data[l]
@@ -206,8 +203,6 @@ def main():
             f"{d['sync_mean']:.0f} ms",
             f"{d['t_net_mean']:.1f} ms",
             f"{d['i_net_mean']:.1f} ms",
-            f"{d['raw_pct']:.1f}%",
-            f"{d['dec_pct']:.1f}%",
         ])
 
     tbl = ax.table(

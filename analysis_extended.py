@@ -2,6 +2,10 @@
 """
 analysis_extended.py — deeper analysis beyond the basic sweep plots.
 
+Publication note: precision/recall / PR curves here reflect **synthetic probabilistic** sensing.
+Use for **internal** threshold (K) tradeoffs only — do not present as real detector performance;
+see docs/reference_detector_metrics.md for real-model ballparks.
+
 Figures produced in results_combined/:
   11_precision_recall_curve.png  — PR curve sweeping K=1..5 per condition
   12_k_sweep_bars.png            — recall & precision at K=1,2,3 for all 14 exps

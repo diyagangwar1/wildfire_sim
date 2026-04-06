@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import socket
 import sys
@@ -54,11 +55,12 @@ FIRE_CONFIRM_K: int = 2     # minimum confirmations required within the window
 # Phase 6: GPS-based pair matching
 # Keep the last SYNC_BUFFER_SIZE messages per stream.
 # Only fuse a pair if |tx_thermal - tx_imagery| <= SYNC_THRESHOLD_MS.
-# 600ms = just over one 500ms send period: captures workers that land on
-# neighbouring ticks (VM scheduling jitter on Mininet) while still filtering
-# out stale cross-tick pairs.
+# Default 2000 ms (2 s): wide enough for VM jitter on Mininet while still bounding
+# how far apart thermal/imagery tx timestamps can be for a fused pair. This is the
+# GPS *pairing* window — not the time-decay half-life in strategy replay plots
+# (see analysis_strategies.strategy_time_decay, t½=2 s).
 SYNC_BUFFER_SIZE: int = 10
-SYNC_THRESHOLD_MS: float = 5.0  # overridden by --sync-threshold-ms
+SYNC_THRESHOLD_MS: float = 2000.0  # overridden by --sync-threshold-ms
 
 # Output logs (paths set at startup from --outdir)
 LATENCY_LOG_JSONL = "latency_log.jsonl"
@@ -100,6 +102,34 @@ csv_writer = None
 
 def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+
+
+def _drone_xyz(msg: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Parse drone_x/y/z from a worker message (optional)."""
+    try:
+        x, y, z = msg.get("drone_x"), msg.get("drone_y"), msg.get("drone_z")
+        if x is None or y is None or z is None:
+            return None, None, None
+        return float(x), float(y), float(z)
+    except (TypeError, ValueError):
+        return None, None, None
+
+
+def inter_drone_geometry(
+    thermal: Dict[str, Any], imagery: Dict[str, Any]
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Returns (3D distance, horizontal separation sqrt(dx^2+dy^2), |dz|) in metres.
+    Used for latency-vs-separation analysis (not distance-to-origin).
+    """
+    tx, ty, tz = _drone_xyz(thermal)
+    ix, iy, iz = _drone_xyz(imagery)
+    if tx is None or ix is None:
+        return None, None, None
+    dx, dy, dz = ix - tx, iy - ty, iz - tz
+    sep_xy = math.sqrt(dx * dx + dy * dy)
+    dist_3d = math.sqrt(dx * dx + dy * dy + dz * dz)
+    return dist_3d, sep_xy, abs(dz)
 
 
 def prune_old(arrivals: deque, now_s: float, window_s: float) -> None:
@@ -235,9 +265,12 @@ def try_evaluate() -> None:
 
         num_dets = len(dets) if isinstance(dets, list) else 0
 
-        # Phase 5: drone distances
+        # Phase 5: drone distances (to origin — from workers) + inter-drone geometry
         thermal_dist = t.get("distance_m")
         imagery_dist = i.get("distance_m")
+        inter_d_m, sep_xy_m, dz_m = inter_drone_geometry(t, i)
+        tx, ty, tz = _drone_xyz(t)
+        ix, iy, iz = _drone_xyz(i)
 
         # Ground-truth fire label: was the shared fire window active when
         # these messages were sent?  Both workers use the same clock-based
@@ -264,12 +297,18 @@ def try_evaluate() -> None:
         )
 
         iso = utc_iso(fusion_end_ns)
+        def _fmt(x: Optional[float]) -> str:
+            return "" if x is None else f"{x:.2f}"
+
         csv_writer.writerow([
             fusion_id, iso, f"{dt_s:.6f}", f"{max_temp:.3f}", fire,
             raw_signal, confirmations, window_fill, decision,
             shape_str, num_dets,
             "" if thermal_dist is None else f"{thermal_dist:.1f}",
             "" if imagery_dist is None else f"{imagery_dist:.1f}",
+            _fmt(tx), _fmt(ty), _fmt(tz),
+            _fmt(ix), _fmt(iy), _fmt(iz),
+            _fmt(inter_d_m), _fmt(sep_xy_m), _fmt(dz_m),
             fire_window, hit_miss,
         ])
         logfile.flush()
@@ -304,6 +343,15 @@ def try_evaluate() -> None:
             "e2e_ms": e2e_ms,
             "thermal_distance_m": thermal_dist,
             "imagery_distance_m": imagery_dist,
+            "thermal_x": tx,
+            "thermal_y": ty,
+            "thermal_z": tz,
+            "imagery_x": ix,
+            "imagery_y": iy,
+            "imagery_z": iz,
+            "inter_drone_dist_m": inter_d_m,
+            "separation_xy_m": sep_xy_m,
+            "separation_dz_m": dz_m,
             "fire_window": fire_window,
             "hit_miss": hit_miss,
         }
@@ -486,6 +534,9 @@ def main() -> None:
         "raw_signal", "window_confirmations", "window_fill", "decision",
         "thermal_shape", "num_detections",
         "thermal_distance_m", "imagery_distance_m",
+        "thermal_x", "thermal_y", "thermal_z",
+        "imagery_x", "imagery_y", "imagery_z",
+        "inter_drone_dist_m", "separation_xy_m", "separation_dz_m",
         "fire_window", "hit_miss",
     ])
 

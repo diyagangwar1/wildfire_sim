@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 *.out
+.DS_Store
+
+# Experiment outputs (regenerate with run_experiments.py)
+results_seed*/
+results/
+results_combined/
