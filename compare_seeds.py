@@ -259,66 +259,66 @@ def plot_cdf():
     print(f"  Wrote {out}")
 
 # ─────────────────────────────────────────────────────────────────────────
-# 5.  Packet loss effect (delay + loss vs delay only)
+# 5.  Packet loss effect — boxplots showing distribution across seeds
 # ─────────────────────────────────────────────────────────────────────────
 def plot_loss_effect():
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle(
-        f"Effect of Packet Loss on Latency\n(mean ± 1 SD across {len(SEEDS)} seeds)",
-        fontsize=13, fontweight="bold",
-    )
+    labels = ["10ms\n0% loss", "10ms\n1% loss", "100ms\n0% loss",
+              "100ms\n1% loss", "100ms\n5% loss"]
+    colors = ["#2196F3", "#FF9800", "#4CAF50", "#F44336", "#9C27B0"]
 
-    labels  = ["10ms\n0% loss", "10ms\n1% loss", "100ms\n0% loss",
-               "100ms\n1% loss", "100ms\n5% loss"]
-    x       = np.arange(len(LOSS_EXPS))
-    bar_w   = 0.22
-
-    e2e_agg  = agg(LOSS_EXPS, e2e_stats)
-
-    # -- latency bars --
-    ax = axes[0]
-    for i, s in enumerate(SEEDS):
-        vals = [e2e_agg[name][s]["mean"] for name, *_ in LOSS_EXPS]
-        ax.bar(x + i * bar_w, vals, bar_w, label=SEED_LABELS[s],
-               color=PALETTE[s], alpha=0.85)
-    means = []
+    # Collect per-seed mean and p95 for each condition
+    mean_data, p95_data = [], []
     for name, *_ in LOSS_EXPS:
-        m, _ = mean_err([e2e_agg[name][s]["mean"] for s in SEEDS])
-        means.append(m)
-    ax.plot(x + bar_w, means, marker="D", color="black",
-            linewidth=2, zorder=5, label="mean")
-    ax.set_xticks(x + bar_w); ax.set_xticklabels(labels, fontsize=9)
-    ax.set_ylabel("Mean E2E latency (ms)", fontsize=11)
-    ax.set_title("Latency", fontsize=11)
-    ax.legend(fontsize=9); ax.grid(True, alpha=0.3, axis="y")
-
-    # -- p95 E2E latency (per condition) --
-    ax = axes[1]
-    for i, s in enumerate(SEEDS):
-        vals = []
-        for name, *_ in LOSS_EXPS:
-            df = load(s, name)
-            if df.empty or "e2e_ms" not in df.columns:
-                vals.append(np.nan)
-            else:
-                vals.append(float(np.percentile(df["e2e_ms"].values, 95)))
-        ax.bar(x + i * bar_w, vals, bar_w, label=SEED_LABELS[s],
-               color=PALETTE[s], alpha=0.85)
-    means = []
-    for name, *_ in LOSS_EXPS:
-        p95s = []
+        seed_means, seed_p95s = [], []
         for s in SEEDS:
             df = load(s, name)
             if not df.empty and "e2e_ms" in df.columns:
-                p95s.append(float(np.percentile(df["e2e_ms"].values, 95)))
-        m, _ = mean_err(p95s)
-        means.append(m)
-    ax.plot(x + bar_w, means, marker="D", color="black",
-            linewidth=2, zorder=5, label="mean")
-    ax.set_xticks(x + bar_w); ax.set_xticklabels(labels, fontsize=9)
-    ax.set_ylabel("p95 E2E latency (ms)", fontsize=11)
-    ax.set_title("p95 E2E", fontsize=11)
-    ax.legend(fontsize=9); ax.grid(True, alpha=0.3, axis="y")
+                v = df["e2e_ms"].dropna().values
+                seed_means.append(float(np.mean(v)))
+                seed_p95s.append(float(np.percentile(v, 95)))
+        mean_data.append(seed_means)
+        p95_data.append(seed_p95s)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig.suptitle(
+        f"Effect of Packet Loss on Latency\n"
+        f"(distribution across {len(SEEDS)} seeds — box = IQR, whiskers = 5th–95th pct)",
+        fontsize=13, fontweight="bold",
+    )
+
+    for ax, data, ylabel, title in [
+        (axes[0], mean_data, "Mean E2E latency (ms)", "Mean E2E Latency"),
+        (axes[1], p95_data,  "p95 E2E latency (ms)",  "p95 E2E Latency"),
+    ]:
+        bp = ax.boxplot(
+            data, patch_artist=True, notch=False,
+            whis=[5, 95], showfliers=False,
+            medianprops=dict(color="black", linewidth=2),
+        )
+        for patch, color in zip(bp["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.75)
+        for cap in bp["caps"]:
+            cap.set_linewidth(1.5)
+        for whisker in bp["whiskers"]:
+            whisker.set_linestyle("--")
+            whisker.set_alpha(0.7)
+
+        # Overlay individual seed dots (jittered)
+        rng = np.random.default_rng(0)
+        for i, vals in enumerate(data, start=1):
+            jitter = rng.uniform(-0.18, 0.18, len(vals))
+            ax.scatter(
+                np.full(len(vals), i) + jitter, vals,
+                s=22, alpha=0.45, color=colors[i - 1], zorder=3,
+            )
+
+        ax.set_xticks(range(1, len(labels) + 1))
+        ax.set_xticklabels(labels, fontsize=10)
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_title(title, fontsize=11)
+        ax.grid(True, alpha=0.3, axis="y")
+        ax.set_ylim(bottom=0)
 
     plt.tight_layout()
     out = OUT_DIR / "5_loss_effect.png"
@@ -429,47 +429,80 @@ def plot_distance_vs_latency():
     print(f"  Wrote {out}")
 
 # ─────────────────────────────────────────────────────────────────────────
-# 8.  Heatmap — mean E2E latency (ms) across ALL 14 experiments × seeds
+# 8.  Horizontal bar chart — mean ± SD per experiment, sorted, color-coded
 # ─────────────────────────────────────────────────────────────────────────
-def plot_heatmap():
+def plot_experiment_comparison():
     ALL_EXPS = [
-        "baseline",
-        "cam_delay_10ms", "cam_delay_50ms", "cam_delay_100ms",
-        "cam_delay_500ms", "cam_delay_1000ms",
-        "thermal_delay_10ms", "thermal_delay_50ms", "thermal_delay_100ms",
-        "thermal_delay_500ms", "thermal_delay_1000ms",
-        "cam_10ms_loss1pct", "cam_100ms_loss1pct", "cam_100ms_loss5pct",
+        ("baseline",             "Baseline",              "baseline"),
+        ("cam_delay_10ms",       "Cam delay 10 ms",       "cam"),
+        ("cam_delay_50ms",       "Cam delay 50 ms",       "cam"),
+        ("cam_delay_100ms",      "Cam delay 100 ms",      "cam"),
+        ("cam_delay_500ms",      "Cam delay 500 ms",      "cam"),
+        ("cam_delay_1000ms",     "Cam delay 1000 ms",     "cam"),
+        ("thermal_delay_10ms",   "Thermal delay 10 ms",   "thermal"),
+        ("thermal_delay_50ms",   "Thermal delay 50 ms",   "thermal"),
+        ("thermal_delay_100ms",  "Thermal delay 100 ms",  "thermal"),
+        ("thermal_delay_500ms",  "Thermal delay 500 ms",  "thermal"),
+        ("thermal_delay_1000ms", "Thermal delay 1000 ms", "thermal"),
+        ("cam_10ms_loss1pct",    "Cam 10ms + 1% loss",    "loss"),
+        ("cam_100ms_loss1pct",   "Cam 100ms + 1% loss",   "loss"),
+        ("cam_100ms_loss5pct",   "Cam 100ms + 5% loss",   "loss"),
     ]
+    TYPE_COLOR = {
+        "baseline": "#4CAF50",
+        "cam":      "#2196F3",
+        "thermal":  "#FF9800",
+        "loss":     "#E91E63",
+    }
 
-    means = np.full((len(ALL_EXPS), len(SEEDS)), np.nan)
-    for i, exp in enumerate(ALL_EXPS):
-        for j, s in enumerate(SEEDS):
-            df = load(s, exp)
-            if not df.empty and "e2e_ms" in df.columns:
-                means[i, j] = float(df["e2e_ms"].mean())
+    rows = []
+    for exp, label, etype in ALL_EXPS:
+        vals = [e2e_stats(load(s, exp))["mean"] for s in SEEDS]
+        vals = [v for v in vals if not np.isnan(v)]
+        if not vals:
+            continue
+        m, sd = float(np.mean(vals)), float(np.std(vals, ddof=0))
+        rows.append((label, etype, m, sd))
 
-    fig, ax = plt.subplots(figsize=(7, 9))
-    fig.suptitle("Mean E2E latency (ms) — Experiments × Seeds",
-                 fontsize=13, fontweight="bold", y=1.01)
+    # Sort by mean latency ascending
+    rows.sort(key=lambda r: r[2])
+    labels_s = [r[0] for r in rows]
+    colors_s = [TYPE_COLOR[r[1]] for r in rows]
+    means_s  = [r[2] for r in rows]
+    sds_s    = [r[3] for r in rows]
 
-    vmax = np.nanmax(means) if np.any(np.isfinite(means)) else 1.0
-    im = ax.imshow(means, cmap="viridis", vmin=0, vmax=vmax, aspect="auto")
-    plt.colorbar(im, ax=ax, label="Mean E2E (ms)", fraction=0.03)
+    fig, ax = plt.subplots(figsize=(11, 7))
+    fig.suptitle(
+        f"Mean E2E Latency per Experiment  (mean ± 1 SD, {len(SEEDS)} seeds)",
+        fontsize=13, fontweight="bold",
+    )
 
-    ax.set_xticks(range(len(SEEDS)))
-    ax.set_xticklabels([f"seed {s}" for s in SEEDS], fontsize=10)
-    ax.set_yticks(range(len(ALL_EXPS)))
-    ax.set_yticklabels(ALL_EXPS, fontsize=9)
+    y = np.arange(len(rows))
+    bars = ax.barh(y, means_s, xerr=sds_s, color=colors_s, alpha=0.85,
+                   error_kw=dict(elinewidth=1.5, capsize=4, ecolor="#333333"),
+                   height=0.65)
 
-    for i in range(len(ALL_EXPS)):
-        for j in range(len(SEEDS)):
-            v = means[i, j]
-            text = f"{v:.0f}" if not np.isnan(v) else "—"
-            ax.text(j, i, text, ha="center", va="center",
-                    fontsize=8, color="white" if not np.isnan(v) and v > vmax * 0.5 else "black")
+    # Annotate bars with mean value
+    for i, (m, sd) in enumerate(zip(means_s, sds_s)):
+        ax.text(m + sd + 30, i, f"{m:.0f}", va="center", fontsize=8.5, color="#222222")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels_s, fontsize=10)
+    ax.set_xlabel("Mean E2E Latency (ms)", fontsize=11)
+    ax.grid(True, alpha=0.25, axis="x")
+    ax.set_xlim(left=0)
+
+    # Legend for experiment type
+    legend_patches = [
+        mpatches.Patch(color=TYPE_COLOR["baseline"], label="Baseline"),
+        mpatches.Patch(color=TYPE_COLOR["cam"],      label="Camera delay"),
+        mpatches.Patch(color=TYPE_COLOR["thermal"],  label="Thermal delay"),
+        mpatches.Patch(color=TYPE_COLOR["loss"],     label="Delay + packet loss"),
+    ]
+    ax.legend(handles=legend_patches, loc="lower right", fontsize=10)
 
     plt.tight_layout()
-    out = OUT_DIR / "8_latency_heatmap.png"
+    out = OUT_DIR / "8_experiment_comparison.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Wrote {out}")
@@ -543,49 +576,116 @@ def plot_summary_table():
     print(f"  Wrote {out}")
 
 # ─────────────────────────────────────────────────────────────────────────
-# 10.  XY trajectory overlay (baseline) — all seeds
+# 10.  E2E latency timeseries — mean ± SD envelope + a few faint traces
 # ─────────────────────────────────────────────────────────────────────────
-def plot_trajectory_overlay():
-    fig, ax = plt.subplots(figsize=(8, 8))
+def plot_timeseries_baseline():
+    # Collect (t_seconds, e2e_ms) per seed, align to t=0
+    seed_series = []
+    for s in SEEDS:
+        df = load(s, "baseline")
+        if df.empty or "fusion_done_ns" not in df.columns:
+            continue
+        t0 = float(df["fusion_done_ns"].iloc[0])
+        t  = (df["fusion_done_ns"].astype(float) - t0) / 1e9
+        seed_series.append((t.values, df["e2e_ms"].values, s))
+
+    if not seed_series:
+        return
+
+    # Build a common time grid (0 → 95th percentile of max times, 100 bins)
+    max_ts = np.percentile([s[0][-1] for s in seed_series], 95)
+    t_grid = np.linspace(0, max_ts, 80)
+
+    # Interpolate each seed onto the grid
+    grid_vals = []
+    for t, v, _ in seed_series:
+        interp = np.interp(t_grid, t, v, left=np.nan, right=np.nan)
+        grid_vals.append(interp)
+    grid_vals = np.array(grid_vals)  # (n_seeds, n_bins)
+
+    mean_v = np.nanmean(grid_vals, axis=0)
+    sd_v   = np.nanstd(grid_vals,  axis=0)
+    p25_v  = np.nanpercentile(grid_vals, 25, axis=0)
+    p75_v  = np.nanpercentile(grid_vals, 75, axis=0)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
     fig.suptitle(
-        "Drone XY Trajectories — Baseline (all seeds)",
+        f"E2E Latency Over Time — Baseline  "
+        f"(mean ± 1 SD, {len(seed_series)} seeds)",
         fontsize=13, fontweight="bold",
     )
-    any_line = False
+
+    # Faint individual lines (5 random seeds for texture)
+    rng = np.random.default_rng(7)
+    sample_idx = rng.choice(len(seed_series), size=min(6, len(seed_series)), replace=False)
+    for idx in sample_idx:
+        t, v, s = seed_series[idx]
+        mask = t <= max_ts
+        ax.plot(t[mask], v[mask], color="#aaaaaa", linewidth=0.7, alpha=0.5, zorder=1)
+
+    # IQR band
+    ax.fill_between(t_grid, p25_v, p75_v, alpha=0.25, color="#2196F3", label="IQR (25–75%)", zorder=2)
+    # SD band
+    ax.fill_between(t_grid, mean_v - sd_v, mean_v + sd_v,
+                    alpha=0.18, color="#FF9800", label="Mean ± 1 SD", zorder=3)
+    # Mean line
+    ax.plot(t_grid, mean_v, color="#1565C0", linewidth=2.5, label="Mean", zorder=4)
+
+    ax.set_xlabel("Time since start (s)", fontsize=11)
+    ax.set_ylabel("E2E latency (ms)", fontsize=11)
+    ax.set_xlim(0, max_ts)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=10, loc="upper right")
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = OUT_DIR / "10_timeseries_baseline.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 11.  Drone XY density heatmap — hexbin per drone type (baseline, all seeds)
+# ─────────────────────────────────────────────────────────────────────────
+def plot_trajectory_overlay():
+    th_x, th_y, im_x, im_y = [], [], [], []
     for s in SEEDS:
         df = load(s, "baseline")
         if df.empty:
             continue
         if "thermal_x" in df.columns and "thermal_y" in df.columns:
             sub = df.dropna(subset=["thermal_x", "thermal_y"])
-            if not sub.empty:
-                ax.plot(
-                    sub["thermal_x"], sub["thermal_y"],
-                    color=PALETTE[s], alpha=0.85, linewidth=1.2,
-                    label=f"thermal {s}",
-                )
-                any_line = True
+            th_x.extend(sub["thermal_x"].tolist())
+            th_y.extend(sub["thermal_y"].tolist())
         if "imagery_x" in df.columns and "imagery_y" in df.columns:
             sub = df.dropna(subset=["imagery_x", "imagery_y"])
-            if not sub.empty:
-                ax.plot(
-                    sub["imagery_x"], sub["imagery_y"],
-                    color=PALETTE[s], alpha=0.55, linewidth=1.0,
-                    linestyle="--",
-                    label=f"imagery {s}",
-                )
-                any_line = True
-    if not any_line:
-        ax.text(
-            0.5, 0.5, "No position columns in logs\n(re-run with current controller)",
-            ha="center", va="center", transform=ax.transAxes, fontsize=11,
-        )
-    ax.set_xlabel("x (m)", fontsize=11)
-    ax.set_ylabel("y (m)", fontsize=11)
-    ax.axis("equal")
-    ax.grid(True, alpha=0.3)
-    if any_line:
-        ax.legend(fontsize=9, loc="upper right")
+            im_x.extend(sub["imagery_x"].tolist())
+            im_y.extend(sub["imagery_y"].tolist())
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig.suptitle(
+        f"Drone Position Density — Baseline ({len(SEEDS)} seeds pooled)\n"
+        "Colour = visit count  (darker = drones spend more time here)",
+        fontsize=13, fontweight="bold",
+    )
+
+    for ax, xs, ys, title, cmap in [
+        (axes[0], th_x, th_y, "Thermal drone",  "Blues"),
+        (axes[1], im_x, im_y, "Imagery drone",  "Oranges"),
+    ]:
+        if xs:
+            hb = ax.hexbin(xs, ys, gridsize=30, cmap=cmap, mincnt=1, linewidths=0.2)
+            plt.colorbar(hb, ax=ax, label="Visit count")
+        else:
+            ax.text(0.5, 0.5, "No position data",
+                    ha="center", va="center", transform=ax.transAxes, fontsize=11)
+        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_xlabel("x (m)", fontsize=11)
+        ax.set_ylabel("y (m)", fontsize=11)
+        ax.set_aspect("equal")
+        ax.grid(True, alpha=0.2)
+
     plt.tight_layout()
     out = OUT_DIR / "11_trajectories_xy.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -593,42 +693,66 @@ def plot_trajectory_overlay():
     print(f"  Wrote {out}")
 
 
-# 11b.  Altitude Z vs time (baseline) — thermal / imagery, all seeds overlaid
+# ─────────────────────────────────────────────────────────────────────────
+# 12.  Drone altitude (Z) — mean ± SD band per drone type, trimmed x-axis
 # ─────────────────────────────────────────────────────────────────────────
 def plot_trajectory_z_time():
-    fig, axes = plt.subplots(2, 1, figsize=(13, 6), sharex=True)
-    fig.suptitle(
-        "Drone Altitude (Z) vs Time — Baseline (all seeds)",
-        fontsize=13, fontweight="bold",
-    )
-    any_line = False
+    th_series, im_series = [], []
     for s in SEEDS:
         df = load(s, "baseline")
         if df.empty or "fusion_done_ns" not in df.columns:
             continue
         t0 = float(df["fusion_done_ns"].iloc[0])
-        t = (df["fusion_done_ns"].astype(float) - t0) / 1e9
+        t  = (df["fusion_done_ns"].astype(float) - t0) / 1e9
         if "thermal_z" in df.columns and df["thermal_z"].notna().any():
-            axes[0].plot(t, df["thermal_z"], color=PALETTE[s], linewidth=1.2,
-                         alpha=0.9, label=f"seed {s}")
-            any_line = True
+            th_series.append((t.values, df["thermal_z"].values))
         if "imagery_z" in df.columns and df["imagery_z"].notna().any():
-            axes[1].plot(t, df["imagery_z"], color=PALETTE[s], linewidth=1.0,
-                         linestyle="--", alpha=0.85, label=f"seed {s}")
-            any_line = True
-    if not any_line:
-        for ax in axes:
-            ax.text(
-                0.5, 0.5, "No Z columns in logs",
-                ha="center", va="center", transform=ax.transAxes, fontsize=11,
-            )
-    axes[0].set_ylabel("Thermal Z (m)", fontsize=11)
-    axes[0].grid(True, alpha=0.3)
-    axes[0].legend(fontsize=8, loc="upper right", ncol=min(4, max(1, len(SEEDS))))
-    axes[1].set_ylabel("Imagery Z (m)", fontsize=11)
-    axes[1].set_xlabel("Time since start (s)", fontsize=11)
-    axes[1].grid(True, alpha=0.3)
-    axes[1].legend(fontsize=8, loc="upper right", ncol=min(4, max(1, len(SEEDS))))
+            im_series.append((t.values, df["imagery_z"].values))
+
+    def _build_envelope(series):
+        if not series:
+            return None, None, None, None
+        max_t = np.percentile([s[0][-1] for s in series], 95)
+        t_grid = np.linspace(0, max_t, 80)
+        grid = np.array([np.interp(t_grid, t, z, left=np.nan, right=np.nan)
+                         for t, z in series])
+        return t_grid, np.nanmean(grid, axis=0), np.nanstd(grid, axis=0), max_t
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=False)
+    fig.suptitle(
+        f"Drone Altitude (Z) vs Time — Baseline  "
+        f"(mean ± 1 SD, {len(SEEDS)} seeds)",
+        fontsize=13, fontweight="bold",
+    )
+
+    for ax, series, ylabel, color, label_seed_lines in [
+        (axes[0], th_series, "Thermal drone altitude (m)", "#1565C0", True),
+        (axes[1], im_series, "Imagery drone altitude (m)", "#E65100", False),
+    ]:
+        t_grid, mean_z, sd_z, max_t = _build_envelope(series)
+        if t_grid is None:
+            ax.text(0.5, 0.5, "No Z data", ha="center", va="center",
+                    transform=ax.transAxes, fontsize=11)
+            continue
+
+        # Faint individual seeds
+        rng = np.random.default_rng(3)
+        sample = rng.choice(len(series), size=min(5, len(series)), replace=False)
+        for idx in sample:
+            t, z = series[idx]
+            mask = t <= max_t
+            ax.plot(t[mask], z[mask], color="#cccccc", linewidth=0.8, alpha=0.6, zorder=1)
+
+        ax.fill_between(t_grid, mean_z - sd_z, mean_z + sd_z,
+                        alpha=0.3, color=color, label="Mean ± 1 SD", zorder=2)
+        ax.plot(t_grid, mean_z, color=color, linewidth=2.5, label="Mean", zorder=3)
+
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_xlabel("Time since start (s)", fontsize=11)
+        ax.set_xlim(0, max_t)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
     plt.tight_layout()
     out = OUT_DIR / "12_trajectories_z.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -636,34 +760,89 @@ def plot_trajectory_z_time():
     print(f"  Wrote {out}")
 
 
-# 12.  E2E latency timeseries (baseline) — all seeds overlaid
 # ─────────────────────────────────────────────────────────────────────────
-def plot_timeseries_baseline():
-    fig, ax = plt.subplots(figsize=(13, 5))
+# 13.  Violin plot — full latency distribution for every experiment
+# ─────────────────────────────────────────────────────────────────────────
+def plot_violin_all_experiments():
+    ALL_EXPS = [
+        ("baseline",             "Baseline",              "baseline"),
+        ("cam_delay_10ms",       "Cam 10ms",              "cam"),
+        ("cam_delay_50ms",       "Cam 50ms",              "cam"),
+        ("cam_delay_100ms",      "Cam 100ms",             "cam"),
+        ("cam_delay_500ms",      "Cam 500ms",             "cam"),
+        ("cam_delay_1000ms",     "Cam 1000ms",            "cam"),
+        ("thermal_delay_10ms",   "Therm 10ms",            "thermal"),
+        ("thermal_delay_50ms",   "Therm 50ms",            "thermal"),
+        ("thermal_delay_100ms",  "Therm 100ms",           "thermal"),
+        ("thermal_delay_500ms",  "Therm 500ms",           "thermal"),
+        ("thermal_delay_1000ms", "Therm 1000ms",          "thermal"),
+        ("cam_10ms_loss1pct",    "Cam 10ms\n+1% loss",    "loss"),
+        ("cam_100ms_loss1pct",   "Cam 100ms\n+1% loss",   "loss"),
+        ("cam_100ms_loss5pct",   "Cam 100ms\n+5% loss",   "loss"),
+    ]
+    TYPE_COLOR = {
+        "baseline": "#4CAF50",
+        "cam":      "#2196F3",
+        "thermal":  "#FF9800",
+        "loss":     "#E91E63",
+    }
+
+    # Pool all e2e_ms values across seeds for each experiment
+    data, tick_labels, colors = [], [], []
+    for exp, label, etype in ALL_EXPS:
+        vals = []
+        for s in SEEDS:
+            df = load(s, exp)
+            if not df.empty and "e2e_ms" in df.columns:
+                vals.extend(df["e2e_ms"].dropna().tolist())
+        if len(vals) < 5:
+            continue
+        # Clip extreme outliers (above 99.5th pct) so violins are readable
+        clip = np.percentile(vals, 99.5)
+        data.append([v for v in vals if v <= clip])
+        tick_labels.append(label)
+        colors.append(TYPE_COLOR[etype])
+
+    fig, ax = plt.subplots(figsize=(16, 6))
     fig.suptitle(
-        f"E2E Latency Over Time — Baseline (all {len(SEEDS)} seeds)",
+        f"E2E Latency Distribution per Experiment  "
+        f"(all {len(SEEDS)} seeds pooled — values clipped at 99.5th pct)",
         fontsize=13, fontweight="bold",
     )
 
-    for s in SEEDS:
-        df = load(s, "baseline")
-        if df.empty:
-            continue
-        t0 = df["fusion_done_ns"].iloc[0]
-        t  = (df["fusion_done_ns"] - t0) / 1e9
-        ax.scatter(t, df["e2e_ms"], s=15, alpha=0.6, color=PALETTE[s],
-                   label=SEED_LABELS[s])
-        ax.plot(t, df["e2e_ms"].rolling(5, min_periods=1).mean(),
-                linewidth=1.5, color=PALETTE[s])
+    parts = ax.violinplot(data, positions=range(len(data)),
+                          showmedians=True, showextrema=False,
+                          widths=0.75)
 
-    ax.set_xlabel("Time since start (s)", fontsize=11)
+    for i, (pc, color) in enumerate(zip(parts["bodies"], colors)):
+        pc.set_facecolor(color)
+        pc.set_alpha(0.7)
+        pc.set_edgecolor("white")
+        pc.set_linewidth(0.5)
+    parts["cmedians"].set_color("black")
+    parts["cmedians"].set_linewidth(2)
+
+    # Overlay IQR markers
+    for i, vals in enumerate(data):
+        q1, med, q3 = np.percentile(vals, [25, 50, 75])
+        ax.vlines(i, q1, q3, color="black", linewidth=4, alpha=0.5, zorder=3)
+
+    ax.set_xticks(range(len(tick_labels)))
+    ax.set_xticklabels(tick_labels, fontsize=9.5, rotation=15, ha="right")
     ax.set_ylabel("E2E latency (ms)", fontsize=11)
-    ax.legend(fontsize=10)
-    ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.25, axis="y")
+
+    legend_patches = [
+        mpatches.Patch(color=TYPE_COLOR["baseline"], label="Baseline"),
+        mpatches.Patch(color=TYPE_COLOR["cam"],      label="Camera delay"),
+        mpatches.Patch(color=TYPE_COLOR["thermal"],  label="Thermal delay"),
+        mpatches.Patch(color=TYPE_COLOR["loss"],     label="Delay + packet loss"),
+    ]
+    ax.legend(handles=legend_patches, loc="upper left", fontsize=10)
 
     plt.tight_layout()
-    out = OUT_DIR / "10_timeseries_baseline.png"
+    out = OUT_DIR / "13_violin_all_experiments.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Wrote {out}")
@@ -685,16 +864,17 @@ def main() -> None:
 
     print(f"\nGenerating combined comparison figures → {OUT_DIR}/")
     print(f"  Seeds discovered: {SEEDS}\n")
-    plot_latency_sweep()
-    plot_cdf()
-    plot_loss_effect()
-    plot_latency_breakdown()
-    plot_distance_vs_latency()
-    plot_heatmap()
-    plot_summary_table()
-    plot_trajectory_overlay()
-    plot_trajectory_z_time()
-    plot_timeseries_baseline()
+    plot_latency_sweep()           # 1  - latency vs delay (line + error bars)
+    plot_cdf()                     # 4  - smooth CDF across conditions
+    plot_loss_effect()             # 5  - boxplots: loss effect across seeds
+    plot_latency_breakdown()       # 6  - stacked bar: component breakdown
+    plot_distance_vs_latency()     # 7  - scatter: separation vs latency
+    plot_experiment_comparison()   # 8  - horizontal bar chart: all experiments
+    plot_summary_table()           # 9  - summary stats table
+    plot_timeseries_baseline()     # 10 - timeseries: mean ± SD envelope
+    plot_trajectory_overlay()      # 11 - XY density hexbin heatmap
+    plot_trajectory_z_time()       # 12 - Z altitude: mean ± SD envelope
+    plot_violin_all_experiments()  # 13 - violin: full distribution all experiments
     print(f"\nDone — {len(list(OUT_DIR.glob('*.png')))} plots in {OUT_DIR}/")
 
 
