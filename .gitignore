@@ -3,5 +3,7 @@ __pycache__/
 *.out
 .DS_Store
 
-# Experiment outputs are tracked (VM / full runs). Heavy; clone may be large.
-# To shrink the repo later, remove large paths from the index and re-ignore.
+# Experiment outputs (regenerate with run_experiments.py)
+results_seed*/
+results/
+results_combined/
