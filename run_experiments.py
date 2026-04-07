@@ -429,7 +429,7 @@ def main() -> None:
     )
     parser.add_argument("--duration", type=int, default=60,
                         help="Seconds to run each experiment (default: 60)")
-    parser.add_argument("--outdir", default="results",
+    parser.add_argument("--outdir", default="data",
                         help="Root output directory; each run gets a sub-folder (default: results)")
     parser.add_argument("--sync-threshold-ms", type=float, default=2000.0,
                         help=(

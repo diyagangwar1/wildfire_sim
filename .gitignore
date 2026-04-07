@@ -1,9 +1,17 @@
 __pycache__/
 *.pyc
+*.pyo
 *.out
 .DS_Store
 
-# Experiment outputs (regenerate with run_experiments.py)
-results_seed*/
+# Raw per-seed experiment outputs — regenerate with:
+#   sudo python3 run_experiments.py --seeds "0-49" --duration 60
+data/
+
+# Aggregated comparison figures — regenerate with:
+#   python3 compare_seeds.py
 results/
+
+# Legacy layout (pre-restructure)
+results_seed*/
 results_combined/

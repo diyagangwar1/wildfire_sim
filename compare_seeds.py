@@ -26,22 +26,24 @@ from scipy import stats
 warnings.filterwarnings("ignore")
 
 # ── paths (OUT_DIR may be overridden by main()) ────────────────────────────
-OUT_DIR = pathlib.Path("results_combined")
+OUT_DIR = pathlib.Path("results")
 
 
 def _discover_seeds() -> Tuple[Dict[int, pathlib.Path], List[int]]:
     dirs: dict[int, pathlib.Path] = {}
-    for p in sorted(glob.glob("results_seed*")):
-        if not os.path.isdir(p):
-            continue
-        try:
-            s = int(os.path.basename(p).replace("results_seed", ""))
-            dirs[s] = pathlib.Path(p)
-        except ValueError:
-            continue
-    if not dirs:
-        for s in (42, 99, 123):
-            dirs[s] = pathlib.Path(f"results_seed{s}")
+    # Look in data/ first (new layout), then fall back to repo root (legacy)
+    search_patterns = ["data/results_seed*", "results_seed*"]
+    for pattern in search_patterns:
+        for p in sorted(glob.glob(pattern)):
+            if not os.path.isdir(p):
+                continue
+            try:
+                s = int(os.path.basename(p).replace("results_seed", ""))
+                dirs[s] = pathlib.Path(p)
+            except ValueError:
+                continue
+        if dirs:
+            break
     seeds = sorted(dirs.keys())
     return dirs, seeds
 
