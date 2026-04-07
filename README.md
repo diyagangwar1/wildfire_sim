@@ -38,13 +38,98 @@ A fire is declared when **all three** conditions hold within a 2-second sync win
 
 ## Requirements
 
+Mininet requires a Linux kernel — it cannot run on macOS directly. If you're on a Mac, follow the VM setup guide below. Analysis and plotting scripts (`compare_seeds.py`, `analyze_latency.py`) work natively on macOS without a VM.
+
+---
+
+## VM Setup (macOS → UTM → Ubuntu)
+
+> Skip this if you're already on Linux.
+
+### 1. Install UTM
+
+Download UTM from [mac.getutm.app](https://mac.getutm.app) (free) and install it.
+
+### 2. Create an Ubuntu VM
+
+1. Download **Ubuntu 22.04 LTS Server** ISO from [ubuntu.com/download/server](https://ubuntu.com/download/server)
+2. Open UTM → **Create a New Virtual Machine** → **Virtualize**
+3. Select **Linux** → choose the Ubuntu ISO
+4. Recommended settings:
+   - **RAM**: 4 GB minimum (8 GB if available)
+   - **CPU cores**: 2+
+   - **Storage**: 20 GB
+5. Complete the Ubuntu installer — set a username and password you'll remember
+6. After installation, eject the ISO: VM settings → Drives → remove the CD-ROM drive
+
+### 3. Enable SSH (optional but recommended)
+
+Inside the VM:
+
 ```bash
-# Linux only (Mininet requires Linux kernel)
-sudo apt install mininet python3-pip
-pip install -r requirements.txt
+sudo apt update && sudo apt install -y openssh-server
+ip a   # note the VM's IP address (e.g. 192.168.64.X)
 ```
 
-**Running on macOS?** Use a Linux VM (UTM, VirtualBox, etc.) and clone the repo there to run experiments. Analysis and plotting scripts (`compare_seeds.py`, `analyze_latency.py`) work natively on macOS.
+From your Mac terminal you can then SSH in instead of using the UTM window:
+
+```bash
+ssh <your-username>@<vm-ip>
+```
+
+### 4. Install dependencies
+
+```bash
+sudo apt update
+sudo apt install -y mininet python3-pip python3-matplotlib python3-numpy git
+sudo pip3 install scipy pandas
+```
+
+Verify Mininet works:
+
+```bash
+sudo mn --test pingall
+# Should print "Results: 0% dropped" then clean up
+```
+
+### 5. Clone the repo and run
+
+```bash
+git clone https://github.com/diyagangwar1/wildfire_sim.git
+cd wildfire_sim
+
+# Run a quick single-seed test (~15 min)
+sudo python3 run_experiments.py --seed 42 --duration 60
+
+# Full 50-seed Monte Carlo sweep (~13 hours)
+sudo python3 run_experiments.py --seeds "0-49" --duration 60
+```
+
+### 6. Copy results back to your Mac
+
+Once experiments finish, copy the `data/` folder from the VM to your Mac for analysis:
+
+```bash
+# Run this on your Mac (replace with your VM's IP and username)
+scp -r <username>@<vm-ip>:~/wildfire_sim/data ./
+```
+
+Then on your Mac, generate the comparison plots:
+
+```bash
+python3 compare_seeds.py    # discovers data/results_seed*/ automatically
+# → writes plots to results/
+```
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `sudo mn` hangs or errors | Run `sudo mn -c` to clean up stale Mininet state, then retry |
+| `ModuleNotFoundError: matplotlib` | `sudo apt install python3-matplotlib` |
+| `ModuleNotFoundError: scipy` | `sudo pip3 install scipy` |
+| SSH connection refused | `sudo systemctl start ssh` inside the VM |
+| VM very slow | In UTM settings, enable **Hardware OpenGL acceleration** and increase CPU cores |
 
 ---
 
