@@ -1,10 +1,25 @@
 """
 Wildfire Multi-Drone Simulation — Imagery Worker
 Phases implemented:
-- Phase 1 (Realism): variable detection counts, empty frames, overlapping boxes
+- Phase 1 (Realism): spatially-evolving fire model (cellular automaton), variable detections
 - Phase 2 (Robustness): dropout simulation + reconnect loop
 - Phase 3 (Timing): GPS/UTC-style timestamps (tx_ns) + processing time measurement
-- Phase 5 (Distance): 3D drone position simulated; drop probability scales linearly with distance
+- Phase 5 (Distance): 3D drone position simulated; drop probability scales with distance
+                      (DISABLED by default — enable with --dist-drop-slope > 0)
+- Phase 7 (Clock sync): optional constant offset + Gaussian jitter on tx_ns timestamps
+                        to simulate GPS clock calibration errors between drones
+
+Flight model
+────────────
+The imagery drone follows the SAME lawnmower XY survey pattern as the thermal drone
+but at a higher altitude (80m) for wider visual field of view.  Both drones cover
+the same ground simultaneously, ensuring they can both detect the same fire event.
+The trajectory seed controls small Gaussian GPS noise (0.5m std dev).
+
+Fire model
+──────────
+Same FireGrid as thermal_worker (identical fire_seed) — both sensors always agree
+on what the fire looks like without any communication.
 
 Sends imagery detections over TCP to controller on port 5002.
 """
@@ -16,16 +31,15 @@ import json
 import math
 import time
 import random
-import sys
 from typing import Any, Dict, List, Tuple
 
-from gps_time import utc_ns, utc_iso, sleep_to_next_tick, is_fire_window
+from gps_time import utc_ns, utc_iso, sleep_to_next_tick
+from fire_model import FireGrid
 
 # --- Network ---
 PORT = 5002
 
-# --- Phase 2: base dropout / robustness ---
-# Overridden at runtime by --base-drop-prob; set to 0.0 for clean experiments.
+# --- Phase 2: base dropout ---
 BASE_DROP_PROB = 0.0
 RECONNECT_SLEEP_S = 1.0
 
@@ -33,22 +47,30 @@ RECONNECT_SLEEP_S = 1.0
 SEND_HZ = 2
 
 # --- Phase 1 realism controls ---
-P_EMPTY = 0.20           # 20% chance no detections
-P_FIRE_LABEL = 0.35      # chance a detection is labeled fire (otherwise "smoke"/"tree"/etc.)
+P_EMPTY = 0.20
 MAX_DETECTIONS = 3
 
-# --- Phase 5: Distance-based drop probability ---
-# Imagery drone starts at a different position from thermal drone.
+# --- Lawnmower survey pattern ---
+# Same XY bounds and sweep parameters as thermal_worker.
+# Imagery drone flies HIGHER for wider visual coverage (80m vs thermal's 40m).
+SURVEY_X_MIN: float = -40.0
+SURVEY_X_MAX: float = 40.0
+SURVEY_Y_MIN: float = -40.0
+SURVEY_Y_MAX: float = 40.0
+STRIP_WIDTH_M: float = 12.0
+MOVE_SPEED_M: float = 4.0
+DRONE_ALTITUDE_M: float = 80.0  # imagery drone higher than thermal for wider FOV
+GPS_NOISE_STD_M: float = 0.5
+
 CONTROLLER_POS: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-# XY < 50 m; Z higher than thermal (80 m) so 3D distance is dominated by height difference
-DRONE_START_POS: Tuple[float, float, float] = (-25.0, -15.0, 80.0)
-DIST_DROP_SLOPE: float = 0.001
+
+# --- Phase 5: Distance-based drop (disabled by default) ---
+DIST_DROP_SLOPE: float = 0.0
 MAX_DROP_PROB: float = 0.80
-DRONE_STEP_M: float = 6.0        # imagery drone moves slightly faster
-DRONE_ALT_MIN_M: float = 10.0
-DRONE_ALT_MAX_M: float = 200.0
-# Keep XY within this radius of controller
-XY_MAX_M: float = 45.0
+
+# --- Phase 7: Clock sync error (overridden by CLI) ---
+CLOCK_OFFSET_NS: int = 0
+CLOCK_JITTER_NS: float = 0.0
 
 
 def _distance_3d(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
@@ -60,38 +82,47 @@ def _drop_prob_from_distance(dist_m: float) -> float:
     return max(BASE_DROP_PROB, min(MAX_DROP_PROB, p))
 
 
-def _random_walk_3d(
-    pos: Tuple[float, float, float],
-    step_m: float,
-) -> Tuple[float, float, float]:
-    dx = random.uniform(-step_m, step_m)
-    dy = random.uniform(-step_m, step_m)
-    dz = random.uniform(-step_m / 2, step_m / 2)
-    x, y, z = pos[0] + dx, pos[1] + dy, pos[2] + dz
-    # Clamp altitude
-    z = max(DRONE_ALT_MIN_M, min(DRONE_ALT_MAX_M, z))
-    # Clamp XY radius so drone stays within realistic radio range
-    xy_dist = math.sqrt(x * x + y * y)
-    if xy_dist > XY_MAX_M:
-        scale = XY_MAX_M / xy_dist
-        x, y = x * scale, y * scale
-    return (x, y, z)
+def _lawnmower_pos(step: int, altitude: float,
+                   x_min: float = SURVEY_X_MIN,
+                   x_max: float = SURVEY_X_MAX,
+                   y_min: float = SURVEY_Y_MIN,
+                   y_max: float = SURVEY_Y_MAX,
+                   strip_width: float = STRIP_WIDTH_M,
+                   speed: float = MOVE_SPEED_M) -> Tuple[float, float, float]:
+    """
+    Deterministic lawnmower waypoint — same formula as thermal_worker.
+    Both drones cover the same XY area, thermal at 40m, imagery at 80m altitude.
+    """
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    steps_per_strip = max(1, int(x_range / speed))
+    n_strips = max(1, int(y_range / strip_width))
+    total_steps = steps_per_strip * n_strips
+
+    pos_in_cycle = step % total_steps
+    strip_idx = pos_in_cycle // steps_per_strip
+    pos_in_strip = pos_in_cycle % steps_per_strip
+
+    t = pos_in_strip / steps_per_strip
+    if strip_idx % 2 == 0:
+        x = x_min + t * x_range
+    else:
+        x = x_max - t * x_range
+
+    y = y_min + (strip_idx + 0.5) * strip_width
+    y = max(y_min, min(y_max, y))
+
+    return (x, y, altitude)
 
 
 def _rand_box(base: Tuple[int, int, int, int] | None = None) -> Tuple[int, int, int, int]:
-    """
-    Generate a bounding box (x1,y1,x2,y2).
-    If base provided, generate a box near it to create overlap.
-    """
     if base is None:
         x1 = random.randint(0, 80)
         y1 = random.randint(0, 80)
         w = random.randint(10, 40)
         h = random.randint(10, 40)
         return (x1, y1, x1 + w, y1 + h)
-
     bx1, by1, bx2, by2 = base
-    # Jitter around base to create overlap
     jitter = 10
     x1 = max(0, bx1 + random.randint(-jitter, jitter))
     y1 = max(0, by1 + random.randint(-jitter, jitter))
@@ -100,16 +131,16 @@ def _rand_box(base: Tuple[int, int, int, int] | None = None) -> Tuple[int, int, 
     return (x1, y1, x1 + w, y1 + h)
 
 
-def gen_imagery() -> Dict[str, Any]:
+def gen_imagery(drone_pos: Tuple[float, float, float],
+                fire_grid: FireGrid) -> Dict[str, Any]:
     """
-    Generate one imagery message with variable detections.
+    Generate one imagery frame.
 
-    Fire model: clock-based phase (is_fire_window) correlates with thermal so
-    both sensors agree on "fire active" periods.
-    During a fire window: 80% chance each detection is labelled 'fire'.
-    Outside a fire window: 5% chance (occasional false positive).
+    fire_sim: drawn from spatial detection probability (FireGrid).
+    Per-detection label: 80% fire if fire_sim, 5% otherwise.
     """
-    in_fire = is_fire_window()
+    detect_p = fire_grid.detection_prob((drone_pos[0], drone_pos[1]))
+    fire_sim = random.random() < detect_p
 
     if random.random() < P_EMPTY:
         detections: List[Dict[str, Any]] = []
@@ -119,18 +150,15 @@ def gen_imagery() -> Dict[str, Any]:
         n = random.randint(1, MAX_DETECTIONS)
         detections = []
         base = _rand_box(None)
-
         fire_present = False
+
         for i in range(n):
             box = _rand_box(base if i > 0 else None)
-            # During fire window: high chance of fire label; outside: low chance
-            fire_p = 0.80 if in_fire else 0.05
+            fire_p = 0.80 if fire_sim else 0.05
             label = "fire" if random.random() < fire_p else random.choice(["smoke", "tree", "rock"])
             conf = round(random.uniform(0.4, 0.99), 3)
-
             if label == "fire":
                 fire_present = True
-
             detections.append({
                 "label": label,
                 "conf": conf,
@@ -158,44 +186,74 @@ def connect(host: str) -> socket.socket:
 
 
 def main() -> None:
-    global BASE_DROP_PROB
+    global BASE_DROP_PROB, DIST_DROP_SLOPE, CLOCK_OFFSET_NS, CLOCK_JITTER_NS
+
     parser = argparse.ArgumentParser(description="Imagery Worker")
     parser.add_argument("host", help="Controller IP address")
     parser.add_argument(
         "--seed", type=int, default=None,
-        help="Random seed for reproducible drone trajectory. "
-             "Use the same seed across runs to isolate other variables.",
+        help="Random seed controlling GPS position noise (not the fire spread).",
+    )
+    parser.add_argument(
+        "--fire-seed", type=int, default=0,
+        help="Seed for the fire propagation model (must match thermal worker). Default: 0.",
     )
     parser.add_argument(
         "--base-drop-prob", type=float, default=BASE_DROP_PROB,
-        help=(
-            "Base packet drop probability (before distance scaling). "
-            "Set to 0 for clean experiments where only Mininet loss applies. "
-            f"Default: {BASE_DROP_PROB}"
-        ),
+        help="Base packet drop probability. Default 0.",
+    )
+    parser.add_argument(
+        "--dist-drop-slope", type=float, default=DIST_DROP_SLOPE,
+        help="Drop probability per metre from controller. Default 0.0 (disabled).",
+    )
+    parser.add_argument(
+        "--clock-offset-ms", type=float, default=0.0,
+        help="Constant GPS clock bias (ms) on this drone's tx_ns.",
+    )
+    parser.add_argument(
+        "--clock-jitter-ms", type=float, default=0.0,
+        help="Std dev (ms) of per-message Gaussian noise on tx_ns.",
     )
     args = parser.parse_args()
 
     if args.seed is not None:
         random.seed(args.seed)
-        print(f"[IMAGERY] Random seed set to {args.seed}")
+        print(f"[IMAGERY] GPS noise seed: {args.seed}")
 
     BASE_DROP_PROB = args.base_drop_prob
-    print(f"[IMAGERY] base_drop_prob={BASE_DROP_PROB}")
+    DIST_DROP_SLOPE = args.dist_drop_slope
+    CLOCK_OFFSET_NS = int(args.clock_offset_ms * 1e6)
+    CLOCK_JITTER_NS = args.clock_jitter_ms * 1e6
+
+    fire_grid = FireGrid(seed=args.fire_seed)
+
+    print(f"[IMAGERY] Flight: lawnmower survey  altitude={DRONE_ALTITUDE_M}m  "
+          f"strip_width={STRIP_WIDTH_M}m  speed={MOVE_SPEED_M}m/step")
+    print(f"[IMAGERY] Survey bounds: X[{SURVEY_X_MIN},{SURVEY_X_MAX}]  "
+          f"Y[{SURVEY_Y_MIN},{SURVEY_Y_MAX}]")
+    print(f"[IMAGERY] base_drop_prob={BASE_DROP_PROB}  dist_drop_slope={DIST_DROP_SLOPE}")
+    print(f"[IMAGERY] clock_offset={args.clock_offset_ms}ms  jitter={args.clock_jitter_ms}ms")
 
     host = args.host
     seq = 0
     period = 1.0 / float(SEND_HZ)
 
-    # Phase 5: drone starts at fixed position and random-walks
-    drone_pos: Tuple[float, float, float] = DRONE_START_POS
-
     sock = connect(host)
-    print(f"[IMAGERY] Connected. Start pos={drone_pos}")
+    print(f"[IMAGERY] Connected.")
 
     while True:
-        # Phase 5: update position and compute distance-based drop probability
-        drone_pos = _random_walk_3d(drone_pos, DRONE_STEP_M)
+        fire_grid.advance_to_wall_clock_step()
+
+        base_pos = _lawnmower_pos(seq, DRONE_ALTITUDE_M)
+        noise_x = random.gauss(0.0, GPS_NOISE_STD_M)
+        noise_y = random.gauss(0.0, GPS_NOISE_STD_M)
+        noise_z = random.gauss(0.0, GPS_NOISE_STD_M * 0.5)
+        drone_pos: Tuple[float, float, float] = (
+            base_pos[0] + noise_x,
+            base_pos[1] + noise_y,
+            max(10.0, base_pos[2] + noise_z),
+        )
+
         dist_m = _distance_3d(drone_pos, CONTROLLER_POS)
         drop_prob = _drop_prob_from_distance(dist_m)
 
@@ -205,23 +263,28 @@ def main() -> None:
             continue
 
         proc_start_ns = utc_ns()
-        msg = gen_imagery()
+        msg = gen_imagery(drone_pos, fire_grid)
         proc_end_ns = utc_ns()
 
-        tx_ns = utc_ns()
+        raw_tx_ns = utc_ns()
+        jitter_ns = int(random.gauss(0, CLOCK_JITTER_NS)) if CLOCK_JITTER_NS > 0 else 0
+        tx_ns = raw_tx_ns + CLOCK_OFFSET_NS + jitter_ns
+
         msg.update({
             "seq": seq,
             "tx_ns": tx_ns,
             "tx_iso": utc_iso(tx_ns),
             "proc_ns": int(proc_end_ns - proc_start_ns),
-            # Ground-truth fire label (mirrors thermal's fire_window field)
-            "fire_window": is_fire_window(),
-            # Phase 5 telemetry
+            "fire_window": fire_grid.is_any_burning(),
+            "fire_cell_count": fire_grid.total_burning(),
+            "fire_visible_count": fire_grid.burning_near(drone_pos[0], drone_pos[1]),
             "drone_x": round(drone_pos[0], 2),
             "drone_y": round(drone_pos[1], 2),
             "drone_z": round(drone_pos[2], 2),
             "distance_m": round(dist_m, 2),
             "drop_prob": round(drop_prob, 4),
+            "clock_offset_ns": CLOCK_OFFSET_NS,
+            "clock_jitter_ns": jitter_ns,
         })
         seq += 1
 

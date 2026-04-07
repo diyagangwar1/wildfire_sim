@@ -66,29 +66,65 @@ Each run:
 - Labels: `"fire"`, `"smoke"`, `"tree"`, `"rock"` — controller acts only on `"fire"`
 - Overlapping bounding boxes — consecutive detections jitter around a base box, simulating the same fire region seen multiple times
 
-### 2. Shared launch position — drones start together
+### 2. Coordinated lawnmower survey pattern
 
-Both drones start at the same launch pad: `(0, 0, 10m)`. This is realistic — in practice, all drones take off from the same site. They then diverge via independent random walks. The thermal drone takes 5m steps; the imagery drone takes 6m steps, so they separate naturally over time.
-
-Previously, drones started at arbitrary pre-separated positions, which baked in artificial spatial separation from frame one. Now their separation emerges organically from the random walk — different seeds produce different divergence patterns.
-
-### 3. Spatial fire model — drone position affects detection probability
-
-The fire exists at a fixed ground-level zone: `FIRE_ZONE_XY = (20, 20)`. Detection probability scales with horizontal distance from the drone to the fire zone:
+Both drones fly the same systematic **lawnmower survey** over a ±40m area — the standard flight plan for drone-based area surveillance. They sweep back and forth in X, advancing by 12m in Y after each strip, covering the entire area on every pass.
 
 ```
-During a fire window:
-  fire_p = max(0.08,  0.90 - 0.008 × dist_xy_metres)
+Survey bounds: X ∈ [-40, +40],  Y ∈ [-40, +40]  (80m × 80m)
+Strip width:   12m  →  ~7 strips per pass
+Speed:         4m/step × 2Hz = 8 m/s  (realistic surveillance UAV)
+Full pass:     ~70 seconds (slightly more than one experiment duration)
 
-  → Directly above fire (dist=0):   ~90% detection
-  → 50m away:                       ~50% detection
-  → 100m+ away:                     ~8%  (matches false-alarm floor)
+Thermal drone:  altitude 40m  (lower = better thermal resolution)
+Imagery drone:  altitude 80m  (higher = wider visual field)
 
-Outside a fire window (regardless of position):
-  fire_p = 0.08  (constant false-alarm floor)
+Both drones cover the same XY area simultaneously.
 ```
 
-Both workers use the **same fire zone** so a drone near the fire zone on both sensors will simultaneously see high-confidence signals — which is the physically correct behavior. Previously, detection probability was independent of drone position: even a drone 200m away had the same 85% detection rate as one directly overhead.
+This guarantees:
+- The fire zone at `(20, 20)` is **always covered** on every pass — both sensors have the same opportunity to detect it
+- Inter-drone XY separation is **~0** (they're directly above/below each other) — the vertical separation of 40m is the primary geometric difference
+- All 50 Monte Carlo seeds fly the **same deterministic route** — only the GPS noise differs, isolating the experiment variable cleanly
+
+The `--seed` argument controls **GPS noise only** (`N(0, 0.5m)` per axis, per step) — realistic GPS accuracy. Previously the seed controlled an entire random walk trajectory, which meant seeds could accidentally avoid the fire zone entirely, making detection rates noisy for the wrong reason.
+
+### 3. Cellular automaton fire propagation model
+
+The fire is no longer a binary on/off square wave. `fire_model.py` implements a full spreading fire on a **120×120 metre grid** (1m cells):
+
+```
+States: UNBURNED → BURNING → BURNED
+
+Each 0.5s step:
+  • Each BURNING cell tries to ignite its 8 neighbours with probability:
+        p = BASE_SPREAD_PROB + WIND_BOOST × max(0, dot(direction, wind))
+        BASE_SPREAD_PROB = 0.12,  WIND_BOOST = 0.20  (NE wind by default)
+  • Each BURNING cell has a 4% chance of burning out → BURNED
+
+Fire starts at ignition point (20, 20) — one cell. Over a 60s run:
+  t=0s  → 1 burning cell
+  t=15s → ~15 cells
+  t=30s → ~80 cells
+  t=60s → ~300+ cells (large, well-detectable fire)
+```
+
+**Detection probability** is position-dependent and grows as the fire spreads:
+
+```
+visible_count = burning cells within 40m horizontal radius of drone
+
+detect_p = FALSE_ALARM_PROB + (DETECT_MAX_P - FALSE_ALARM_P) × √(visible_count / 20)
+         = 0.06 + 0.86 × √(count / 20)
+
+→ 0 visible cells  →  6%  (false alarm only)
+→ 5 cells          → ~40%
+→ 20 cells         → ~92% (saturates near maximum)
+```
+
+**How both workers stay in sync without communication:** Both workers call `fire_grid.advance_to_wall_clock_step()` each loop, which computes `target = int(time.time() / 0.5)` and advances the grid to that step. Since both use the same `fire_seed` (default 0), their isolated `random.Random` instances make identical RNG calls in identical order, producing byte-for-byte the same grid at every wall-clock moment. No message passing required.
+
+The `fire_seed` is completely independent of the trajectory seed (`--seed`). Changing the trajectory seed changes where the drones fly but not how the fire spreads — and vice versa. This clean separation is what makes the 50-seed Monte Carlo meaningful: the 50 seeds vary drone trajectories against the same fire event.
 
 ### 4. Clean baseline — distance-based drop is opt-in
 
@@ -192,7 +228,7 @@ Running 50 independent seeds gives:
 
 4. **What is the tolerance for GPS clock error?** At what clock offset does the pair-matching system start breaking down? Where does the fusion raw signal check fail?
 
-5. **How does drone proximity to the fire affect detection rates?** With the spatial fire model, seeds where the random walk brings drones near `(20, 20)` should have higher TP rates than seeds where drones stay far away.
+5. **How does the fire's growth affect detection rates over time?** Early in a run the fire is small — even a nearby drone may miss it. As it spreads to 50+ cells, detection becomes reliable. Does high network delay cause the system to miss the early, critical detection window?
 
 6. **Is latency stable over a mission?** The timeseries plots check whether latency drifts upward (buffer buildup) or stays stationary.
 
@@ -204,7 +240,7 @@ Running 50 independent seeds gives:
 |-----------|---------|---------|
 | Controller is a fixed ground station at `(0,0,0)` | Proposal envisions a flying controller drone | Medium — drop model is based on wrong reference point |
 | Network delay is constant within a run | Real RF links have time-varying multipath fading | Medium |
-| Fire ground truth is a square wave at a fixed XY | Real fires ignite, spread, and move | Medium |
+| Fire ignition point is fixed; wind direction is constant | Real fires chase wind, terrain, and fuel gradients | Low — growth and spread now modelled; dynamic wind is not |
 | Workers share the same physical clock source (VM) | Real drones each have independent GPS receiver drift | Low — clock error experiments now cover this explicitly |
 | Only 2 worker drones | Proposal envisions 100+ | High for scalability questions; fine for protocol analysis |
 | No conditional payload (always sends bounding boxes) | Proposal: send raw image only when model confidence is low | Low for latency study; missing for bandwidth/compute tradeoffs |
@@ -215,9 +251,10 @@ Running 50 independent seeds gives:
 
 | File | Role |
 |------|------|
-| `thermal_worker.py` | Thermal sensor — spatial fire model, random walk from shared launch pad, opt-in distance drop, GPS clock error |
-| `imagery_worker.py` | Imagery sensor — same spatial + walk + clock model as thermal |
-| `gps_time.py` | Shared time utilities — `utc_ns()`, `sleep_to_next_tick()`, `is_fire_window()` |
+| `fire_model.py` | Cellular automaton fire spread — 120×120m grid, wind-biased propagation, wall-clock-based sync between workers |
+| `thermal_worker.py` | Thermal sensor — FireGrid detection, random walk from shared launch pad, opt-in distance drop, clock error |
+| `imagery_worker.py` | Imagery sensor — same FireGrid + walk + clock model as thermal |
+| `gps_time.py` | Shared time utilities — `utc_ns()`, `sleep_to_next_tick()` |
 | `controller.py` | Ground controller — GPS pair matching, rolling-window fusion, full latency logging |
 | `mn_topo.py` | Mininet topology — per-link delay/loss + per-worker clock error args |
 | `run_experiments.py` | Orchestrator — 20 experiments in 3 groups (network, clock, distance) |

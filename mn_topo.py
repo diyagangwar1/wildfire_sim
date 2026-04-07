@@ -1,10 +1,11 @@
 """
-Mininet Topology for Wildfire Multi-Drone Simulation (Phases 1–6)
+Mininet Topology for Wildfire Multi-Drone Simulation (Phases 1–7)
 
 Phases supported by topology:
 - Phase 2 (Robustness): supports loss
 - Phase 3 (Timing/Latency): supports asymmetric delay per link (thermal vs imagery)
 - Phase 6 (GPS sync): passes --sync-threshold-ms to controller
+- Phase 7 (Clock sync): passes per-worker clock offset and jitter independently
 
 Topology:
   h1 (controller) --- s1 --- h2 (thermal)
@@ -14,6 +15,10 @@ Topology:
 We make thermal and imagery links configurable independently:
 - thermal-delay / thermal-loss applies to link (s1 <-> h2)
 - imagery-delay / imagery-loss applies to link (s1 <-> h3)
+
+Each worker also receives its own clock error parameters (--clock-offset-ms and
+--clock-jitter-ms), allowing the thermal and imagery clocks to be miscalibrated
+independently — matching real-world GPS receiver heterogeneity.
 
 Interactive mode (default):
   sudo python3 mn_topo.py --thermal-delay 20 --imagery-delay 80
@@ -62,8 +67,31 @@ def parse_args() -> argparse.Namespace:
                    help="Seconds to run in auto mode")
     p.add_argument("--sync-threshold-ms", type=float, default=2000.0,
                    help="GPS pair-matching window passed to controller (ms); default 2000 (2 s)")
+
+    # Shared worker drop settings
+    p.add_argument("--fire-seed", type=int, default=0,
+                   help="Seed for the fire propagation model (passed to both workers). Default 0.")
     p.add_argument("--base-drop-prob", type=float, default=0.0,
-                   help="Base packet drop probability for workers")
+                   help="Base packet drop probability for both workers (before distance scaling)")
+    p.add_argument("--dist-drop-slope", type=float, default=0.0,
+                   help=(
+                       "Drop probability per metre of 3D distance from controller. "
+                       "Default 0.0 (disabled). Use 0.001 to enable distance-based drops."
+                   ))
+
+    # Per-worker clock error — thermal drone
+    p.add_argument("--thermal-clock-offset-ms", type=float, default=0.0,
+                   help="Constant tx_ns offset (ms) for the thermal worker. "
+                        "Positive = thermal clock running fast.")
+    p.add_argument("--thermal-clock-jitter-ms", type=float, default=0.0,
+                   help="Std dev (ms) of per-message Gaussian noise on thermal tx_ns.")
+
+    # Per-worker clock error — imagery drone
+    p.add_argument("--imagery-clock-offset-ms", type=float, default=0.0,
+                   help="Constant tx_ns offset (ms) for the imagery worker.")
+    p.add_argument("--imagery-clock-jitter-ms", type=float, default=0.0,
+                   help="Std dev (ms) of per-message Gaussian noise on imagery tx_ns.")
+
     return p.parse_args()
 
 
@@ -77,7 +105,6 @@ def _run_auto(net, h1, h2, h3, args: argparse.Namespace) -> None:
     thermal_log = open(os.path.join(outdir, "thermal.log"), "w")
     imagery_log = open(os.path.join(outdir, "imagery.log"), "w")
 
-    # Controller on h1 — use absolute path so cwd doesn't matter
     ctrl_proc = h1.popen(
         ["python3", os.path.join(script_dir, "controller.py"),
          "--outdir", outdir,
@@ -85,22 +112,40 @@ def _run_auto(net, h1, h2, h3, args: argparse.Namespace) -> None:
         stdout=ctrl_log, stderr=ctrl_log,
         cwd=script_dir,
     )
-    time.sleep(2)  # let controller bind ports
+    time.sleep(2)
 
-    # Worker args
-    worker_extra: list[str] = ["--base-drop-prob", str(args.base_drop_prob)]
+    # Thermal worker — gets its own clock error settings
+    thermal_extra: list[str] = [
+        "--fire-seed",         str(args.fire_seed),
+        "--base-drop-prob",    str(args.base_drop_prob),
+        "--dist-drop-slope",   str(args.dist_drop_slope),
+        "--clock-offset-ms",   str(args.thermal_clock_offset_ms),
+        "--clock-jitter-ms",   str(args.thermal_clock_jitter_ms),
+    ]
     if args.seed is not None:
-        worker_extra += ["--seed", str(args.seed)]
+        thermal_extra += ["--seed", str(args.seed)]
+
+    # Imagery worker — gets its own (potentially different) clock error settings
+    # fire-seed must be the same as thermal so both see identical fire state
+    imagery_extra: list[str] = [
+        "--fire-seed",         str(args.fire_seed),
+        "--base-drop-prob",    str(args.base_drop_prob),
+        "--dist-drop-slope",   str(args.dist_drop_slope),
+        "--clock-offset-ms",   str(args.imagery_clock_offset_ms),
+        "--clock-jitter-ms",   str(args.imagery_clock_jitter_ms),
+    ]
+    if args.seed is not None:
+        imagery_extra += ["--seed", str(args.seed)]
 
     thermal_proc = h2.popen(
         ["python3", os.path.join(script_dir, "thermal_worker.py"),
-         h1.IP()] + worker_extra,
+         h1.IP()] + thermal_extra,
         stdout=thermal_log, stderr=thermal_log,
         cwd=script_dir,
     )
     imagery_proc = h3.popen(
         ["python3", os.path.join(script_dir, "imagery_worker.py"),
-         h1.IP()] + worker_extra,
+         h1.IP()] + imagery_extra,
         stdout=imagery_log, stderr=imagery_log,
         cwd=script_dir,
     )
@@ -113,7 +158,6 @@ def _run_auto(net, h1, h2, h3, args: argparse.Namespace) -> None:
         print(".", end="", flush=True)
     print(" done")
 
-    # Graceful shutdown
     for proc in [thermal_proc, imagery_proc, ctrl_proc]:
         proc.terminate()
         try:
@@ -124,7 +168,6 @@ def _run_auto(net, h1, h2, h3, args: argparse.Namespace) -> None:
     for f in [ctrl_log, thermal_log, imagery_log]:
         f.close()
 
-    # Quick diagnostic
     latency_log = os.path.join(outdir, "latency_log.jsonl")
     if os.path.exists(latency_log) and os.path.getsize(latency_log) > 0:
         n = open(latency_log).read().strip().count("\n") + 1
