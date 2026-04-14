@@ -272,10 +272,13 @@ def try_evaluate() -> None:
         tx, ty, tz = _drone_xyz(t)
         ix, iy, iz = _drone_xyz(i)
 
-        # Ground-truth fire label: was the shared fire window active when
-        # these messages were sent?  Both workers use the same clock-based
-        # schedule so their values should agree; use thermal's as canonical.
+        # Ground-truth fire label + CA fire stats from the thermal worker message.
+        # Both workers run the same FireGrid so these values are identical;
+        # we use thermal's copy as canonical.
         fire_window = bool(t.get("fire_window", False))
+        fire_cell_count   = t.get("fire_cell_count",   0)
+        fire_visible_count = t.get("fire_visible_count", 0)
+        clock_offset_ns   = t.get("clock_offset_ns",  0)
 
         # Hit/miss classification against ground truth
         # TP = fire_window AND decision  (correctly detected)
@@ -354,6 +357,9 @@ def try_evaluate() -> None:
             "separation_dz_m": dz_m,
             "fire_window": fire_window,
             "hit_miss": hit_miss,
+            "fire_cell_count": fire_cell_count,
+            "fire_visible_count": fire_visible_count,
+            "clock_offset_ns": clock_offset_ns,
         }
         with open(LATENCY_LOG_JSONL, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")

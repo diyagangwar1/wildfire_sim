@@ -101,6 +101,10 @@ class FireGrid:
         ]
         self.t: int = 0   # current step count
 
+        # Record creation time so advance_to_wall_clock_step() advances relative
+        # to experiment start, not Unix epoch (epoch / 0.5 ≈ 3.5B steps = hangs).
+        self._start_s: float = time.time()
+
         # Ignite the starting cell
         ix, iy = self._world_to_cell(IGNITION_XY_M[0], IGNITION_XY_M[1])
         if 0 <= ix < GRID_CELLS and 0 <= iy < GRID_CELLS:
@@ -160,13 +164,19 @@ class FireGrid:
 
     def advance_to_wall_clock_step(self) -> None:
         """
-        Advance the fire grid to match the current wall-clock step.
+        Advance the fire grid to match elapsed wall-clock time since creation.
 
-        Both workers call this once per send loop.  Because they both use
-        absolute time.time(), they always arrive at the same step count
-        regardless of process start-time differences.
+        Target = int(elapsed_seconds / FIRE_STEP_INTERVAL_S).  Both workers
+        create their FireGrid within milliseconds of each other at experiment
+        start (both launched by mn_topo.py / run_experiments.py), so they
+        track the same target and stay byte-for-byte identical throughout the
+        run without any inter-process communication.
+
+        Using elapsed time (not Unix epoch) avoids needing to advance billions
+        of steps from a cold grid.
         """
-        target = int(time.time() / FIRE_STEP_INTERVAL_S)
+        elapsed_s = time.time() - self._start_s
+        target = int(elapsed_s / FIRE_STEP_INTERVAL_S)
         while self.t < target:
             self.step()
 
