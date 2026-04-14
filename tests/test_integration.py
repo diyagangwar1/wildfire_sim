@@ -74,6 +74,7 @@ class TestEndToEndNoMininet(unittest.TestCase):
                 [python, os.path.join(REPO_ROOT, "thermal_worker.py"),
                  "127.0.0.1",
                  "--seed", "42",
+                 "--fire-seed", "0",
                  "--base-drop-prob", "0"],
                 th_log,
             )
@@ -81,6 +82,7 @@ class TestEndToEndNoMininet(unittest.TestCase):
                 [python, os.path.join(REPO_ROOT, "imagery_worker.py"),
                  "127.0.0.1",
                  "--seed", "42",
+                 "--fire-seed", "0",
                  "--base-drop-prob", "0"],
                 im_log,
             )
@@ -124,6 +126,8 @@ class TestEndToEndNoMininet(unittest.TestCase):
             required_fields = [
                 "fusion_id", "e2e_ms", "raw_signal", "decision",
                 "fire_window", "hit_miss",
+                "fire_cell_count", "fire_visible_count",
+                "clock_offset_ns",
             ]
             for field in required_fields:
                 self.assertIn(
