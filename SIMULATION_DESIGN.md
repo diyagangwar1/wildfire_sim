@@ -252,13 +252,25 @@ Running 50 independent seeds gives:
 | File | Role |
 |------|------|
 | `fire_model.py` | Cellular automaton fire spread — 120×120m grid, wind-biased propagation, wall-clock-based sync between workers |
-| `thermal_worker.py` | Thermal sensor — FireGrid detection, random walk from shared launch pad, opt-in distance drop, clock error |
-| `imagery_worker.py` | Imagery sensor — same FireGrid + walk + clock model as thermal |
+| `thermal_worker.py` | Thermal sensor — FireGrid detection, deterministic lawnmower trajectory from shared launch pad, opt-in distance drop, clock error |
+| `imagery_worker.py` | Imagery sensor — same FireGrid + lawnmower + clock model as thermal |
 | `gps_time.py` | Shared time utilities — `utc_ns()`, `sleep_to_next_tick()` |
 | `controller.py` | Ground controller — GPS pair matching, rolling-window fusion, full latency logging |
 | `mn_topo.py` | Mininet topology — per-link delay/loss + per-worker clock error args |
 | `run_experiments.py` | Orchestrator — 20 experiments in 3 groups (network, clock, distance) |
-| `compare_seeds.py` | Aggregate analysis — cross-seed comparison plots into `results/` |
+| `compare_seeds.py` | Aggregate analysis — cross-seed comparison plots into `results/results_combined/` |
 | `analyze_latency.py` | Per-run analysis — latency breakdown, timeseries, drone distance, hit/miss table |
 | `model_latency.py` | Analytical model — predicted vs. measured E2E latency curves |
 | `investigate_anomaly.py` | Deep-dive tool — isolates seed-specific or experiment-specific anomalies |
+
+---
+
+## Canonical Repository Data Layout (Apr 15 update)
+
+To avoid stale-result confusion, the repository now uses one canonical dataset layout:
+
+- Raw Monte Carlo run data: `data/results_mc50_seed0` ... `data/results_mc50_seed49`
+- Combined aggregate outputs: `results/results_combined/`
+- Report snapshot for the latest run: `results/results_combined/APR15_RESULTS_ANALYSIS.md`
+
+This separation ensures the analysis scripts only consume the intended 50-seed dataset and prevents mixing with legacy pre-Apr-15 outputs.

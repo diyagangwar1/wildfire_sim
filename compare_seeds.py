@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-compare_seeds.py  —  cross-seed aggregate comparison visuals (latency-focused)
+compare_seeds.py  —  cross-seed aggregate comparison visuals
 
-Discovers results_seed*/ directories in the repo (or falls back to seeds 42,99,123)
-and writes results_combined/ with comparison figures. Detection precision/recall
-plots are omitted — simulation sensing is not a stand-in for real detector metrics.
+Discovers results_mc50_seed*/ directories (canonical Apr-15 dataset, 50 seeds,
+20 experiments each including clock-sync and distance-drop experiments).
+Writes results/results_combined/ with all comparison figures.
 """
 
 import argparse
+import collections
 import glob
 import json
 import os
@@ -26,22 +27,25 @@ from scipy import stats
 warnings.filterwarnings("ignore")
 
 # ── paths (OUT_DIR may be overridden by main()) ────────────────────────────
-OUT_DIR = pathlib.Path("results")
+OUT_DIR = pathlib.Path("results/results_combined")
 
 
 def _discover_seeds() -> Tuple[Dict[int, pathlib.Path], List[int]]:
     dirs: dict[int, pathlib.Path] = {}
-    # Look in data/ first (new layout), then fall back to repo root (legacy)
-    search_patterns = ["data/results_seed*", "results_seed*"]
+    # Canonical layout: data/results_mc50_seedN/
+    search_patterns = ["data/results_mc50_seed*", "results_mc50_seed*", "data/results_seed*", "results_seed*"]
     for pattern in search_patterns:
         for p in sorted(glob.glob(pattern)):
             if not os.path.isdir(p):
                 continue
-            try:
-                s = int(os.path.basename(p).replace("results_seed", ""))
-                dirs[s] = pathlib.Path(p)
-            except ValueError:
-                continue
+            base = os.path.basename(p)
+            for prefix in ("results_mc50_seed", "results_seed"):
+                if base.startswith(prefix):
+                    try:
+                        s = int(base[len(prefix):])
+                        dirs[s] = pathlib.Path(p)
+                    except ValueError:
+                        pass
         if dirs:
             break
     seeds = sorted(dirs.keys())
@@ -73,6 +77,14 @@ LOSS_EXPS = [
     ("cam_delay_100ms",     100,  0.0),
     ("cam_100ms_loss1pct",  100,  1.0),
     ("cam_100ms_loss5pct",  100,  5.0),
+]
+CLOCK_EXPS = [
+    ("baseline",          "Baseline",          0),
+    ("clock_offset_100ms","Offset ±100ms",   100),
+    ("clock_offset_500ms","Offset ±500ms",   500),
+    ("clock_offset_1000ms","Offset ±1000ms",1000),
+    ("clock_jitter_50ms", "Jitter 50ms",      50),
+    ("clock_jitter_200ms","Jitter 200ms",    200),
 ]
 
 TAB10 = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
@@ -447,12 +459,19 @@ def plot_experiment_comparison():
         ("cam_10ms_loss1pct",    "Cam 10ms + 1% loss",    "loss"),
         ("cam_100ms_loss1pct",   "Cam 100ms + 1% loss",   "loss"),
         ("cam_100ms_loss5pct",   "Cam 100ms + 5% loss",   "loss"),
+        ("clock_offset_100ms",   "Clock offset 100 ms",   "clock"),
+        ("clock_offset_500ms",   "Clock offset 500 ms",   "clock"),
+        ("clock_offset_1000ms",  "Clock offset 1000 ms",  "clock"),
+        ("clock_jitter_50ms",    "Clock jitter 50 ms",    "clock"),
+        ("clock_jitter_200ms",   "Clock jitter 200 ms",   "clock"),
+        ("dist_drop_enabled",    "Dist-based drop",       "loss"),
     ]
     TYPE_COLOR = {
         "baseline": "#4CAF50",
         "cam":      "#2196F3",
         "thermal":  "#FF9800",
         "loss":     "#E91E63",
+        "clock":    "#9C27B0",
     }
 
     rows = []
@@ -512,43 +531,61 @@ def plot_experiment_comparison():
 # ─────────────────────────────────────────────────────────────────────────
 def plot_summary_table():
     ALL_EXPS = [
-        ("baseline",            "Baseline",               0,    0,    0.0),
-        ("cam_delay_10ms",      "Cam 10 ms",              10,   0,    0.0),
-        ("cam_delay_50ms",      "Cam 50 ms",              50,   0,    0.0),
-        ("cam_delay_100ms",     "Cam 100 ms",             100,  0,    0.0),
-        ("cam_delay_500ms",     "Cam 500 ms",             500,  0,    0.0),
-        ("cam_delay_1000ms",    "Cam 1000 ms",            1000, 0,    0.0),
-        ("thermal_delay_10ms",  "Thermal 10 ms",          0,    10,   0.0),
-        ("thermal_delay_50ms",  "Thermal 50 ms",          0,    50,   0.0),
-        ("thermal_delay_100ms", "Thermal 100 ms",         0,    100,  0.0),
-        ("thermal_delay_500ms", "Thermal 500 ms",         0,    500,  0.0),
-        ("thermal_delay_1000ms","Thermal 1000 ms",        0,    1000, 0.0),
-        ("cam_10ms_loss1pct",   "Cam 10ms + 1% loss",    10,   0,    1.0),
-        ("cam_100ms_loss1pct",  "Cam 100ms + 1% loss",   100,  0,    1.0),
-        ("cam_100ms_loss5pct",  "Cam 100ms + 5% loss",   100,  0,    5.0),
+        ("baseline",            "Baseline",               "—",    "—",   "—"),
+        ("cam_delay_10ms",      "Cam 10 ms",              "10",   "—",   "—"),
+        ("cam_delay_50ms",      "Cam 50 ms",              "50",   "—",   "—"),
+        ("cam_delay_100ms",     "Cam 100 ms",             "100",  "—",   "—"),
+        ("cam_delay_500ms",     "Cam 500 ms",             "500",  "—",   "—"),
+        ("cam_delay_1000ms",    "Cam 1000 ms",            "1000", "—",   "—"),
+        ("thermal_delay_10ms",  "Thermal 10 ms",          "—",    "10",  "—"),
+        ("thermal_delay_50ms",  "Thermal 50 ms",          "—",    "50",  "—"),
+        ("thermal_delay_100ms", "Thermal 100 ms",         "—",    "100", "—"),
+        ("thermal_delay_500ms", "Thermal 500 ms",         "—",    "500", "—"),
+        ("thermal_delay_1000ms","Thermal 1000 ms",        "—",    "1000","—"),
+        ("cam_10ms_loss1pct",   "Cam 10ms+1% loss",       "10",   "—",   "1%"),
+        ("cam_100ms_loss1pct",  "Cam 100ms+1% loss",      "100",  "—",   "1%"),
+        ("cam_100ms_loss5pct",  "Cam 100ms+5% loss",      "100",  "—",   "5%"),
+        ("clock_offset_100ms",  "Clock offset 100ms",     "—",    "—",   "off+100ms"),
+        ("clock_offset_500ms",  "Clock offset 500ms",     "—",    "—",   "off+500ms"),
+        ("clock_offset_1000ms", "Clock offset 1000ms",    "—",    "—",   "off+1s"),
+        ("clock_jitter_50ms",   "Clock jitter 50ms",      "—",    "—",   "jit±50ms"),
+        ("clock_jitter_200ms",  "Clock jitter 200ms",     "—",    "—",   "jit±200ms"),
+        ("dist_drop_enabled",   "Dist-based drop",        "—",    "—",   "dist"),
     ]
 
     rows = []
-    for exp, label, cam_d, th_d, loss in ALL_EXPS:
+    for exp, label, cam_d, th_d, extra in ALL_EXPS:
         e2e_vals = [e2e_stats(load(s, exp))["mean"] for s in SEEDS]
         p95_vals = [e2e_stats(load(s, exp))["p95"] for s in SEEDS]
         e_m, e_s = mean_err(e2e_vals)
         p_m, p_s = mean_err(p95_vals)
-        rows.append([label,
-                     f"{cam_d}",
-                     f"{th_d}",
-                     f"{loss:.0f}%",
+
+        # Detection F1
+        seed_f1 = []
+        for s in SEEDS:
+            df = load(s, exp)
+            if df.empty or "hit_miss" not in df.columns:
+                continue
+            hm = collections.Counter(df["hit_miss"].tolist())
+            tp = hm.get("TP", 0); fp = hm.get("FP", 0); fn = hm.get("FN", 0)
+            denom = 2 * tp + fp + fn
+            seed_f1.append(2 * tp / denom if denom > 0 else np.nan)
+        ff = [x for x in seed_f1 if not np.isnan(x)]
+        f1_str = f"{np.mean(ff):.2f} ± {np.std(ff):.2f}" if ff else "—"
+
+        rows.append([label, cam_d, th_d, extra,
                      f"{e_m:.0f} ± {e_s:.0f}",
-                     f"{p_m:.0f} ± {p_s:.0f}"])
+                     f"{p_m:.0f} ± {p_s:.0f}",
+                     f1_str])
 
-    col_headers = ["Experiment", "Cam\ndelay", "Thermal\ndelay", "Loss",
-                   "E2E mean (ms)\n± SD", "E2E p95 (ms)\n± SD"]
-    col_widths = [0.24, 0.08, 0.1, 0.07, 0.22, 0.22]
+    col_headers = ["Experiment", "Cam\ndelay", "Thermal\ndelay", "Other",
+                   "E2E mean (ms)\n± SD", "E2E p95 (ms)\n± SD", "F1\n± SD"]
+    col_widths = [0.22, 0.07, 0.08, 0.10, 0.19, 0.19, 0.13]
 
-    fig, ax = plt.subplots(figsize=(15, 8))
+    fig, ax = plt.subplots(figsize=(17, 10))
     ax.axis("off")
     fig.suptitle(
-        f"Summary: All Experiments — Mean ± SD Across Seeds ({', '.join(map(str, SEEDS))})",
+        f"Summary: All Experiments — Mean ± SD Across {len(SEEDS)} Seeds (Apr-15 Monte Carlo)",
         fontsize=13, fontweight="bold", y=0.98,
     )
 
@@ -556,8 +593,8 @@ def plot_summary_table():
                    colWidths=col_widths,
                    cellLoc="center", loc="center")
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(9)
-    tbl.scale(1, 1.55)
+    tbl.set_fontsize(8.5)
+    tbl.scale(1, 1.4)
 
     # colour header row
     for j in range(len(col_headers)):
@@ -646,10 +683,11 @@ def plot_timeseries_baseline():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# 11.  Drone XY density heatmap — hexbin per drone type (baseline, all seeds)
+# 11.  Drone XY 2D map — occupancy raster + representative tracks
 # ─────────────────────────────────────────────────────────────────────────
 def plot_trajectory_overlay():
     th_x, th_y, im_x, im_y = [], [], [], []
+    th_tracks, im_tracks = [], []
     for s in SEEDS:
         df = load(s, "baseline")
         if df.empty:
@@ -658,25 +696,50 @@ def plot_trajectory_overlay():
             sub = df.dropna(subset=["thermal_x", "thermal_y"])
             th_x.extend(sub["thermal_x"].tolist())
             th_y.extend(sub["thermal_y"].tolist())
+            th_tracks.append((sub["thermal_x"].to_numpy(), sub["thermal_y"].to_numpy()))
         if "imagery_x" in df.columns and "imagery_y" in df.columns:
             sub = df.dropna(subset=["imagery_x", "imagery_y"])
             im_x.extend(sub["imagery_x"].tolist())
             im_y.extend(sub["imagery_y"].tolist())
+            im_tracks.append((sub["imagery_x"].to_numpy(), sub["imagery_y"].to_numpy()))
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle(
-        f"Drone Position Density — Baseline ({len(SEEDS)} seeds pooled)\n"
-        "Colour = visit count  (darker = drones spend more time here)",
+        f"Drone Survey 2D Map — Baseline ({len(SEEDS)} seeds pooled)\n"
+        "Raster = occupancy count per map cell | thin lines = representative paths",
         fontsize=13, fontweight="bold",
     )
 
-    for ax, xs, ys, title, cmap in [
-        (axes[0], th_x, th_y, "Thermal drone",  "Blues"),
-        (axes[1], im_x, im_y, "Imagery drone",  "Oranges"),
+    for ax, xs, ys, tracks, title, cmap, line_color in [
+        (axes[0], th_x, th_y, th_tracks, "Thermal drone", "Blues", "#0D47A1"),
+        (axes[1], im_x, im_y, im_tracks, "Imagery drone", "Oranges", "#E65100"),
     ]:
         if xs:
-            hb = ax.hexbin(xs, ys, gridsize=30, cmap=cmap, mincnt=1, linewidths=0.2)
-            plt.colorbar(hb, ax=ax, label="Visit count")
+            # Build a true 2D occupancy raster map
+            xbins = np.linspace(-45, 45, 37)
+            ybins = np.linspace(-40, 35, 31)
+            h, xedges, yedges = np.histogram2d(xs, ys, bins=[xbins, ybins])
+            h_plot = np.ma.masked_where(h.T == 0, h.T)
+            im = ax.imshow(
+                h_plot,
+                extent=[xedges[0], xedges[-1], yedges[0], yedges[-1]],
+                origin="lower",
+                cmap=cmap,
+                aspect="equal",
+                interpolation="nearest",
+                alpha=0.9,
+            )
+            plt.colorbar(im, ax=ax, label="Occupancy count")
+
+            # Overlay a few representative trajectories
+            rng = np.random.default_rng(123)
+            if tracks:
+                sample_idx = rng.choice(len(tracks), size=min(6, len(tracks)), replace=False)
+                for idx in sample_idx:
+                    tx, ty = tracks[idx]
+                    ax.plot(tx, ty, color=line_color, linewidth=0.8, alpha=0.35, zorder=3)
+                    ax.scatter(tx[0], ty[0], s=12, color="black", alpha=0.55, zorder=4)
+                    ax.scatter(tx[-1], ty[-1], s=12, color="white", edgecolor="black", alpha=0.8, zorder=4)
         else:
             ax.text(0.5, 0.5, "No position data",
                     ha="center", va="center", transform=ax.transAxes, fontsize=11)
@@ -779,12 +842,19 @@ def plot_violin_all_experiments():
         ("cam_10ms_loss1pct",    "Cam 10ms\n+1% loss",    "loss"),
         ("cam_100ms_loss1pct",   "Cam 100ms\n+1% loss",   "loss"),
         ("cam_100ms_loss5pct",   "Cam 100ms\n+5% loss",   "loss"),
+        ("clock_offset_100ms",   "Offset\n100ms",         "clock"),
+        ("clock_offset_500ms",   "Offset\n500ms",         "clock"),
+        ("clock_offset_1000ms",  "Offset\n1000ms",        "clock"),
+        ("clock_jitter_50ms",    "Jitter\n50ms",          "clock"),
+        ("clock_jitter_200ms",   "Jitter\n200ms",         "clock"),
+        ("dist_drop_enabled",    "Dist\ndrop",            "loss"),
     ]
     TYPE_COLOR = {
         "baseline": "#4CAF50",
         "cam":      "#2196F3",
         "thermal":  "#FF9800",
         "loss":     "#E91E63",
+        "clock":    "#9C27B0",
     }
 
     # Pool all e2e_ms values across seeds for each experiment
@@ -847,13 +917,504 @@ def plot_violin_all_experiments():
     plt.close(fig)
     print(f"  Wrote {out}")
 
+# ─────────────────────────────────────────────────────────────────────────
+# 14.  Detection Performance — Precision / Recall / F1 per experiment
+# ─────────────────────────────────────────────────────────────────────────
+def plot_detection_performance():
+    import collections
+
+    ALL_EXPS = [
+        ("baseline",             "Baseline",               "baseline"),
+        ("cam_delay_10ms",       "Cam 10ms",               "cam"),
+        ("cam_delay_50ms",       "Cam 50ms",               "cam"),
+        ("cam_delay_100ms",      "Cam 100ms",              "cam"),
+        ("cam_delay_500ms",      "Cam 500ms",              "cam"),
+        ("cam_delay_1000ms",     "Cam 1000ms",             "cam"),
+        ("thermal_delay_10ms",   "Therm 10ms",             "thermal"),
+        ("thermal_delay_50ms",   "Therm 50ms",             "thermal"),
+        ("thermal_delay_100ms",  "Therm 100ms",            "thermal"),
+        ("thermal_delay_500ms",  "Therm 500ms",            "thermal"),
+        ("thermal_delay_1000ms", "Therm 1000ms",           "thermal"),
+        ("cam_10ms_loss1pct",    "Cam 10ms+1%loss",        "loss"),
+        ("cam_100ms_loss1pct",   "Cam 100ms+1%loss",       "loss"),
+        ("cam_100ms_loss5pct",   "Cam 100ms+5%loss",       "loss"),
+        ("clock_offset_100ms",   "Offset 100ms",           "clock"),
+        ("clock_offset_500ms",   "Offset 500ms",           "clock"),
+        ("clock_offset_1000ms",  "Offset 1000ms",          "clock"),
+        ("clock_jitter_50ms",    "Jitter 50ms",            "clock"),
+        ("clock_jitter_200ms",   "Jitter 200ms",           "clock"),
+        ("dist_drop_enabled",    "Dist drop",              "loss"),
+    ]
+    TYPE_COLOR = {
+        "baseline": "#4CAF50",
+        "cam":      "#2196F3",
+        "thermal":  "#FF9800",
+        "loss":     "#E91E63",
+        "clock":    "#9C27B0",
+    }
+
+    labels, colors, prec_m, prec_e, rec_m, rec_e, f1_m, f1_e = [], [], [], [], [], [], [], []
+
+    for exp, label, etype in ALL_EXPS:
+        seed_prec, seed_rec, seed_f1 = [], [], []
+        for s in SEEDS:
+            df = load(s, exp)
+            if df.empty or "hit_miss" not in df.columns:
+                continue
+            hm = collections.Counter(df["hit_miss"].tolist())
+            tp = hm.get("TP", 0); fp = hm.get("FP", 0); fn = hm.get("FN", 0)
+            p = tp / (tp + fp) if (tp + fp) > 0 else np.nan
+            r = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+            f = 2 * p * r / (p + r) if (not np.isnan(p) and not np.isnan(r) and (p + r) > 0) else np.nan
+            seed_prec.append(p); seed_rec.append(r); seed_f1.append(f)
+
+        pp = [x for x in seed_prec if not np.isnan(x)]
+        rr = [x for x in seed_rec  if not np.isnan(x)]
+        ff = [x for x in seed_f1   if not np.isnan(x)]
+        if not pp:
+            continue
+        labels.append(label)
+        colors.append(TYPE_COLOR[etype])
+        prec_m.append(np.mean(pp)); prec_e.append(np.std(pp, ddof=0))
+        rec_m.append(np.mean(rr));  rec_e.append(np.std(rr,  ddof=0))
+        f1_m.append(np.mean(ff));   f1_e.append(np.std(ff,   ddof=0))
+
+    x = np.arange(len(labels))
+    w = 0.26
+    fig, ax = plt.subplots(figsize=(16, 6))
+    fig.suptitle(
+        f"Detection Performance per Experiment  (mean ± 1 SD, {len(SEEDS)} seeds)\n"
+        "Precision = TP/(TP+FP)  |  Recall = TP/(TP+FN)  |  F1 = harmonic mean",
+        fontsize=12, fontweight="bold",
+    )
+
+    ax.bar(x - w, prec_m, w, yerr=prec_e, label="Precision", color="#1565C0",
+           alpha=0.85, error_kw=dict(elinewidth=1.2, capsize=3, ecolor="#333"))
+    ax.bar(x,     rec_m,  w, yerr=rec_e,  label="Recall",    color="#E65100",
+           alpha=0.85, error_kw=dict(elinewidth=1.2, capsize=3, ecolor="#333"))
+    ax.bar(x + w, f1_m,   w, yerr=f1_e,   label="F1",        color="#2E7D32",
+           alpha=0.85, error_kw=dict(elinewidth=1.2, capsize=3, ecolor="#333"))
+
+    # Annotate F1 values above each group
+    for i, (fm, fe) in enumerate(zip(f1_m, f1_e)):
+        ax.text(x[i] + w, fm + fe + 0.015, f"{fm:.2f}", ha="center",
+                fontsize=7.5, color="#2E7D32", fontweight="bold")
+
+    # Colour X-tick labels by experiment type
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    for tick, color in zip(ax.get_xticklabels(), colors):
+        tick.set_color(color)
+
+    ax.set_ylabel("Score (0 – 1)", fontsize=11)
+    ax.set_ylim(0, 1.05)
+    ax.axhline(0.5, color="gray", linestyle=":", linewidth=0.9, alpha=0.6, label="0.5 reference")
+    ax.legend(fontsize=10, loc="lower right")
+    ax.grid(True, alpha=0.25, axis="y")
+
+    import matplotlib.patches as mpatches
+    legend_patches = [
+        mpatches.Patch(color=TYPE_COLOR["baseline"], label="Baseline"),
+        mpatches.Patch(color=TYPE_COLOR["cam"],      label="Camera delay"),
+        mpatches.Patch(color=TYPE_COLOR["thermal"],  label="Thermal delay"),
+        mpatches.Patch(color=TYPE_COLOR["loss"],     label="Delay + packet loss"),
+    ]
+    ax.legend(handles=legend_patches + [
+        mpatches.Patch(color="#1565C0", label="Precision"),
+        mpatches.Patch(color="#E65100", label="Recall"),
+        mpatches.Patch(color="#2E7D32", label="F1"),
+        plt.Line2D([0], [0], color="gray", linestyle=":", linewidth=1, label="0.5 ref"),
+    ], fontsize=8.5, loc="lower right", ncol=2)
+
+    plt.tight_layout()
+    out = OUT_DIR / "14_detection_performance.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 15.  Latency decomposition: network+proc vs queuing wait (baseline)
+# ─────────────────────────────────────────────────────────────────────────
+def plot_queuing_wait():
+    """
+    The controller buffers a frame from one drone until a matching frame
+    from the other drone arrives.  Reported e2e_ms includes this waiting time,
+    but the component columns (thermal_net, imagery_net, *_proc) only sum to
+    actual processing time (typically < 5 ms).  The gap is the queuing wait.
+    """
+    qwait, netproc = [], []
+    for s in SEEDS:
+        df = load(s, "baseline")
+        if df.empty:
+            continue
+        comp_cols = ["thermal_net_ns", "imagery_net_ns",
+                     "thermal_proc_ns", "imagery_proc_ns", "fusion_proc_ns"]
+        missing = [c for c in comp_cols if c not in df.columns]
+        if missing:
+            continue
+        total_comp_ms = df[comp_cols].sum(axis=1) / 1e6
+        queue_ms = df["e2e_ms"] - total_comp_ms
+        qwait.extend(queue_ms.clip(lower=0).tolist())
+        netproc.extend(total_comp_ms.tolist())
+
+    if not qwait:
+        return
+
+    qwait  = np.array(qwait)
+    netproc = np.array(netproc)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(
+        "Latency Decomposition — Baseline (all 50 seeds pooled)\n"
+        "Queuing wait = time a frame sits in buffer before its pair arrives",
+        fontsize=13, fontweight="bold",
+    )
+
+    # Left: histogram of queuing wait
+    ax = axes[0]
+    clip = np.percentile(qwait, 99)
+    ax.hist(qwait[qwait <= clip], bins=60, color="#E65100", alpha=0.8, edgecolor="white")
+    ax.axvline(np.median(qwait), color="black", linewidth=1.8, linestyle="--",
+               label=f"median = {np.median(qwait):.0f} ms")
+    ax.axvline(np.mean(qwait),   color="red",   linewidth=1.8, linestyle="-",
+               label=f"mean   = {np.mean(qwait):.0f} ms")
+    ax.set_xlabel("Queuing wait (ms)", fontsize=11)
+    ax.set_ylabel("Count", fontsize=11)
+    ax.set_title("Queuing Wait Distribution (clipped at p99)", fontsize=11)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    # Right: stacked bar showing fraction fast vs slow
+    ax2 = axes[1]
+    thresh_ms = [0, 10, 100, 500, 1000, 2000]
+    fast_pct = [float((qwait < t).mean() * 100) for t in thresh_ms[1:]]
+    slow_pct = [100 - p for p in fast_pct]
+    bar_labels = [f"< {t} ms" for t in thresh_ms[1:]]
+    y = np.arange(len(bar_labels))
+    ax2.barh(y, fast_pct, color="#4CAF50", alpha=0.85, label="Fast (queuing < threshold)")
+    ax2.barh(y, slow_pct, left=fast_pct, color="#F44336", alpha=0.85, label="Slow (queuing ≥ threshold)")
+    ax2.set_yticks(y)
+    ax2.set_yticklabels(bar_labels, fontsize=10)
+    ax2.set_xlabel("% of fusions", fontsize=11)
+    ax2.set_title("Fast vs Slow Fusions by Queuing Threshold", fontsize=11)
+    ax2.set_xlim(0, 100)
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3, axis="x")
+    for i, (fp, sp) in enumerate(zip(fast_pct, slow_pct)):
+        ax2.text(fp / 2, i, f"{fp:.0f}%", ha="center", va="center",
+                 fontsize=9, color="white", fontweight="bold")
+
+    plt.tight_layout()
+    out = OUT_DIR / "15_queuing_wait.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+def plot_clock_sync_effect():
+    """
+    Plot 16 — how clock offset and jitter affect E2E latency and F1.
+    Two panels: (left) median E2E vs clock error magnitude; (right) F1 vs clock error.
+    """
+    configs = [
+        ("baseline",           "Baseline",      "none",   0),
+        ("clock_offset_100ms", "Offset 100ms",  "offset", 100),
+        ("clock_offset_500ms", "Offset 500ms",  "offset", 500),
+        ("clock_offset_1000ms","Offset 1000ms", "offset", 1000),
+        ("clock_jitter_50ms",  "Jitter 50ms",   "jitter", 50),
+        ("clock_jitter_200ms", "Jitter 200ms",  "jitter", 200),
+    ]
+    COLOR = {"none": "#4CAF50", "offset": "#9C27B0", "jitter": "#FF5722"}
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig.suptitle(
+        f"Clock Synchronisation Error Effects  (mean ± 1 SD, {len(SEEDS)} seeds)\n"
+        "Offset = constant clock skew between drones  |  Jitter = random per-frame timing noise",
+        fontsize=12, fontweight="bold",
+    )
+
+    # Per-config stats
+    labels, types, magnitudes = [], [], []
+    med_means, med_sds = [], []
+    f1_means, f1_sds = [], []
+    n_fusions = []
+
+    for exp, label, ctype, mag in configs:
+        seed_meds, seed_f1s, seed_n = [], [], []
+        for s in SEEDS:
+            df = load(s, exp)
+            if df.empty:
+                continue
+            seed_meds.append(float(df["e2e_ms"].median()))
+            hm = collections.Counter(df.get("hit_miss", pd.Series()).tolist())
+            tp = hm.get("TP", 0); fp = hm.get("FP", 0); fn = hm.get("FN", 0)
+            denom = 2 * tp + fp + fn
+            seed_f1s.append(2 * tp / denom if denom > 0 else np.nan)
+            seed_n.append(len(df))
+        labels.append(label); types.append(ctype); magnitudes.append(mag)
+        med_means.append(np.mean(seed_meds) if seed_meds else np.nan)
+        med_sds.append(np.std(seed_meds) if len(seed_meds) > 1 else 0)
+        ff = [x for x in seed_f1s if not np.isnan(x)]
+        f1_means.append(np.mean(ff) if ff else np.nan)
+        f1_sds.append(np.std(ff) if len(ff) > 1 else 0)
+        n_fusions.append(np.mean(seed_n) if seed_n else 0)
+
+    x = np.arange(len(labels))
+    bar_colors = [COLOR[t] for t in types]
+
+    # Left: median E2E
+    ax = axes[0]
+    bars = ax.bar(x, med_means, yerr=med_sds, color=bar_colors, alpha=0.85,
+                  error_kw=dict(elinewidth=1.5, capsize=4, ecolor="#333"))
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax.set_ylabel("Median E2E latency (ms)", fontsize=11)
+    ax.set_title("Median E2E Latency", fontsize=11)
+    ax.set_ylim(bottom=0)
+    ax.grid(True, alpha=0.3, axis="y")
+
+    # Middle: F1
+    ax2 = axes[1]
+    ax2.bar(x, f1_means, yerr=f1_sds, color=bar_colors, alpha=0.85,
+            error_kw=dict(elinewidth=1.5, capsize=4, ecolor="#333"))
+    for i, (fm, fd) in enumerate(zip(f1_means, f1_sds)):
+        if not np.isnan(fm):
+            ax2.text(i, fm + fd + 0.01, f"{fm:.2f}", ha="center",
+                     fontsize=9, fontweight="bold", color=bar_colors[i])
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax2.set_ylabel("F1 score", fontsize=11)
+    ax2.set_title("Fire Detection F1 Score", fontsize=11)
+    ax2.set_ylim(0, 1.0)
+    ax2.axhline(f1_means[0], color="#4CAF50", linestyle="--", linewidth=1.2,
+                alpha=0.7, label=f"Baseline F1={f1_means[0]:.2f}")
+    ax2.legend(fontsize=9)
+    ax2.grid(True, alpha=0.3, axis="y")
+
+    # Right: mean fusion count
+    ax3 = axes[2]
+    ax3.bar(x, n_fusions, color=bar_colors, alpha=0.85)
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+    ax3.set_ylabel("Mean fusions per seed", fontsize=11)
+    ax3.set_title("Fusion Throughput", fontsize=11)
+    ax3.set_ylim(bottom=0)
+    ax3.grid(True, alpha=0.3, axis="y")
+    for i, n in enumerate(n_fusions):
+        ax3.text(i, n + 0.3, f"{n:.0f}", ha="center", fontsize=9, color=bar_colors[i])
+
+    legend_patches = [
+        mpatches.Patch(color=COLOR["none"],   label="Baseline (no error)"),
+        mpatches.Patch(color=COLOR["offset"], label="Clock offset"),
+        mpatches.Patch(color=COLOR["jitter"], label="Clock jitter"),
+    ]
+    fig.legend(handles=legend_patches, loc="lower center", ncol=3, fontsize=10,
+               bbox_to_anchor=(0.5, -0.05))
+
+    plt.tight_layout()
+    out = OUT_DIR / "16_clock_sync_effect.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+def plot_fire_growth():
+    """
+    Plot 17 — fire_cell_count and fire_visible_count over time for baseline,
+    showing how fire grows and how much of it is actually visible to sensors.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(
+        f"Fire Growth Over Time — Baseline ({len(SEEDS)} seeds)\n"
+        "fire_cell_count = total burning cells  |  fire_visible_count = cells visible to sensors",
+        fontsize=12, fontweight="bold",
+    )
+
+    for ax, col, ylabel, color, title in [
+        (axes[0], "fire_cell_count",    "Fire cells (total)",    "#F44336", "Total Fire Area"),
+        (axes[1], "fire_visible_count", "Visible fire cells",    "#FF9800", "Visible Fire Area"),
+    ]:
+        series_list = []
+        for s in SEEDS:
+            df = load(s, "baseline")
+            if df.empty or col not in df.columns or "fusion_done_ns" not in df.columns:
+                continue
+            t0 = float(df["fusion_done_ns"].iloc[0])
+            t = (df["fusion_done_ns"].astype(float) - t0) / 1e9
+            series_list.append((t.values, df[col].values))
+
+        if not series_list:
+            ax.text(0.5, 0.5, f"No {col} data", ha="center", va="center",
+                    transform=ax.transAxes, fontsize=11)
+            continue
+
+        max_t = np.percentile([s[0][-1] for s in series_list], 95)
+        t_grid = np.linspace(0, max_t, 80)
+        grid = np.array([np.interp(t_grid, t, v, left=np.nan, right=np.nan)
+                         for t, v in series_list])
+        mean_v = np.nanmean(grid, axis=0)
+        sd_v   = np.nanstd(grid, axis=0)
+
+        # Faint individual seeds
+        rng = np.random.default_rng(42)
+        sample = rng.choice(len(series_list), size=min(6, len(series_list)), replace=False)
+        for idx in sample:
+            t, v = series_list[idx]
+            mask = t <= max_t
+            ax.plot(t[mask], v[mask], color="#cccccc", linewidth=0.8, alpha=0.5, zorder=1)
+
+        ax.fill_between(t_grid, mean_v - sd_v, mean_v + sd_v,
+                        alpha=0.3, color=color, label="Mean ± 1 SD", zorder=2)
+        ax.plot(t_grid, mean_v, color=color, linewidth=2.5, label="Mean", zorder=3)
+        ax.set_xlabel("Time since start (s)", fontsize=11)
+        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_title(title, fontsize=11)
+        ax.set_xlim(0, max_t)
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = OUT_DIR / "17_fire_growth.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 18.  Confusion balance by experiment (TP/FN share)
+# ─────────────────────────────────────────────────────────────────────────
+def plot_confusion_balance():
+    exps = [
+        "baseline", "cam_delay_10ms", "cam_delay_100ms", "cam_delay_500ms",
+        "thermal_delay_10ms", "thermal_delay_100ms", "thermal_delay_500ms",
+        "cam_10ms_loss1pct", "cam_100ms_loss5pct",
+        "clock_offset_100ms", "clock_offset_500ms", "clock_jitter_200ms",
+        "dist_drop_enabled",
+    ]
+    labels, tp_share, fn_share = [], [], []
+
+    for exp in exps:
+        tp = fn = 0
+        for s in SEEDS:
+            df = load(s, exp)
+            if df.empty or "hit_miss" not in df.columns:
+                continue
+            hm = collections.Counter(df["hit_miss"].tolist())
+            tp += hm.get("TP", 0)
+            fn += hm.get("FN", 0)
+        total = tp + fn
+        if total == 0:
+            continue
+        labels.append(exp.replace("_", "\n"))
+        tp_share.append(100.0 * tp / total)
+        fn_share.append(100.0 * fn / total)
+
+    fig, ax = plt.subplots(figsize=(14, 5.5))
+    x = np.arange(len(labels))
+    ax.bar(x, tp_share, color="#4CAF50", alpha=0.9, label="TP share")
+    ax.bar(x, fn_share, bottom=tp_share, color="#F44336", alpha=0.9, label="FN share")
+    for i, v in enumerate(tp_share):
+        ax.text(i, v / 2, f"{v:.0f}%", ha="center", va="center", fontsize=8, color="white", fontweight="bold")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=8.5)
+    ax.set_ylim(0, 100)
+    ax.set_ylabel("Share of positive events (%)")
+    ax.set_title("Detection Quality by Experiment (TP vs FN)")
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(fontsize=10)
+    plt.tight_layout()
+    out = OUT_DIR / "18_confusion_balance.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 19.  Queuing wait vs fire visibility (baseline)
+# ─────────────────────────────────────────────────────────────────────────
+def plot_queue_vs_visibility():
+    qwait, visible = [], []
+    for s in SEEDS:
+        df = load(s, "baseline")
+        if df.empty:
+            continue
+        req = ["e2e_ms", "thermal_net_ns", "imagery_net_ns", "thermal_proc_ns", "imagery_proc_ns", "fusion_proc_ns"]
+        if not all(c in df.columns for c in req):
+            continue
+        comp_ms = df[["thermal_net_ns", "imagery_net_ns", "thermal_proc_ns", "imagery_proc_ns", "fusion_proc_ns"]].sum(axis=1) / 1e6
+        q = (df["e2e_ms"] - comp_ms).clip(lower=0)
+        qwait.extend(q.tolist())
+        if "fire_visible_count" in df.columns:
+            visible.extend(df["fire_visible_count"].fillna(0).astype(float).tolist())
+        else:
+            visible.extend([0.0] * len(q))
+
+    if not qwait:
+        return
+
+    qwait = np.array(qwait)
+    visible = np.array(visible)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(visible, qwait, s=16, alpha=0.3, color="#1E88E5")
+    if len(np.unique(visible)) > 1:
+        slope, intercept, r, p, _ = stats.linregress(visible, qwait)
+        xs = np.linspace(float(np.min(visible)), float(np.max(visible)), 120)
+        ax.plot(xs, slope * xs + intercept, color="#D81B60", linewidth=2, label=f"fit r={r:.2f}, p={p:.3f}")
+        ax.legend(fontsize=10)
+    ax.set_xlabel("Visible fire cells")
+    ax.set_ylabel("Queuing wait (ms)")
+    ax.set_title("Queuing Wait vs Fire Visibility (Baseline, pooled)")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out = OUT_DIR / "19_queue_vs_visibility.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 20.  Experiment stability map (mean vs SD of E2E)
+# ─────────────────────────────────────────────────────────────────────────
+def plot_stability_map():
+    experiments = sorted({d.name for d in SEED_DIRS[SEEDS[0]].iterdir() if d.is_dir() and d.name != "sweep_plots"})
+    rows = []
+    for exp in experiments:
+        seed_means = []
+        for s in SEEDS:
+            df = load(s, exp)
+            if df.empty or "e2e_ms" not in df.columns:
+                continue
+            seed_means.append(float(df["e2e_ms"].mean()))
+        if seed_means:
+            rows.append((exp, float(np.mean(seed_means)), float(np.std(seed_means, ddof=0))))
+    if not rows:
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 7))
+    for exp, mu, sd in rows:
+        ax.scatter(mu, sd, s=65, alpha=0.8, color="#6A1B9A")
+        ax.annotate(exp.replace("_", " "), (mu, sd), textcoords="offset points", xytext=(6, 3), fontsize=8)
+    ax.set_xlabel("Mean E2E latency across seeds (ms)")
+    ax.set_ylabel("SD across seeds (ms)")
+    ax.set_title("Experiment Stability Map (lower-left is better)")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out = OUT_DIR / "20_stability_map.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Wrote {out}")
+
+
 # ──────────────────────────────────────────────────────────────────────────
 def main() -> None:
     global OUT_DIR, SEED_DIRS, SEEDS, PALETTE, SEED_LABELS
     ap = argparse.ArgumentParser(description="Cross-seed latency comparison figures.")
     ap.add_argument(
-        "--outdir", type=pathlib.Path, default=pathlib.Path("results_combined"),
-        help="Output directory for PNGs (default: results_combined)",
+        "--outdir", type=pathlib.Path, default=pathlib.Path("results/results_combined"),
+        help="Output directory for PNGs (default: results/results_combined)",
     )
     args = ap.parse_args()
     OUT_DIR = args.outdir
@@ -870,11 +1431,18 @@ def main() -> None:
     plot_latency_breakdown()       # 6  - stacked bar: component breakdown
     plot_distance_vs_latency()     # 7  - scatter: separation vs latency
     plot_experiment_comparison()   # 8  - horizontal bar chart: all experiments
-    plot_summary_table()           # 9  - summary stats table
+    plot_summary_table()           # 9  - summary stats table (now includes F1 + clock exps)
     plot_timeseries_baseline()     # 10 - timeseries: mean ± SD envelope
-    plot_trajectory_overlay()      # 11 - XY density hexbin heatmap
+    plot_trajectory_overlay()      # 11 - XY 2D occupancy map + tracks
     plot_trajectory_z_time()       # 12 - Z altitude: mean ± SD envelope
     plot_violin_all_experiments()  # 13 - violin: full distribution all experiments
+    plot_detection_performance()   # 14 - precision / recall / F1 per experiment
+    plot_queuing_wait()            # 15 - queuing wait decomposition (fast vs slow path)
+    plot_clock_sync_effect()       # 16 - clock offset / jitter impact
+    plot_fire_growth()             # 17 - fire cell count & visibility over time
+    plot_confusion_balance()       # 18 - TP/FN composition per experiment
+    plot_queue_vs_visibility()     # 19 - queuing wait vs visibility
+    plot_stability_map()           # 20 - mean-vs-std stability map
     print(f"\nDone — {len(list(OUT_DIR.glob('*.png')))} plots in {OUT_DIR}/")
 
 
